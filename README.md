@@ -1,6 +1,6 @@
 # Ranked LeetCode
 
-A 1v1 version of [LeetCode](https://leetcode.com).Send a challenge, get matched, and race
+A 1v1 version of [LeetCode](https://leetcode.com). Send a challenge, get matched, and race
 someone on the same problem. Python runs on your browser.
 
 - Challenge lobby with quick match, or pick a problem by number, slug or URL
