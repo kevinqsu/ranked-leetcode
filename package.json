@@ -1,0 +1,17 @@
+{
+  "name": "codeduel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LeetCode 1v1: race a friend on the same problem. Zero-dependency Node server for TJHSST Director.",
+  "type": "module",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "LEETCODE_MOCK=1 node server/server.js",
+    "test": "node test/run-tests.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

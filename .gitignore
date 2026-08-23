@@ -1,0 +1,5 @@
+data/
+node_modules/
+test/.pyodide/
+test/.tmp/
+.DS_Store

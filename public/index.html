@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>1v1 — LeetCode duels</title>
+    <meta name="description" content="Practice or race a friend on the same LeetCode problem." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ffa116'/%3E%3Ctext x='16' y='22' font-family='Arial,sans-serif' font-weight='700' font-size='15' text-anchor='middle' fill='%23171717'%3E1v1%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="style.css?v=1" />
+    <script>
+      // Pyodide (Python in the browser) is loaded from a CDN and cached by the browser.
+      // Sources are tried in order; to self-host, unzip the Pyodide core into public/pyodide/
+      // and put "pyodide/" first in this list.
+      window.CODEDUEL_CONFIG = {
+        pyodideBases: [
+          "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/",
+          "https://cdn.jsdelivr.net/npm/pyodide@314.0.5/",
+          "https://unpkg.com/pyodide@314.0.5/",
+        ],
+      };
+      (function () {
+        try {
+          var theme = localStorage.getItem("duel-theme");
+          if (theme !== "light" && theme !== "dark") theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <main class="app" id="app">
+      <header class="app-bar">
+        <button class="app-title" id="home-button" type="button" title="Main menu">1v1</button>
+        <span class="online-pill" id="online-pill" title="Players online">–</span>
+        <div class="bar-center" id="bar-center"></div>
+        <div class="bar-spacer"></div>
+        <div class="bar-actions" id="bar-actions"></div>
+        <button class="bar-button lc-button" id="lc-button" type="button" title="Use your own LeetCode account for real submissions">Link LeetCode</button>
+        <button class="bar-button theme-button" id="theme-button" type="button">Light</button>
+      </header>
+      <div id="screen"></div>
+      <div id="toast" class="toast" hidden></div>
+      <div id="modal-root"></div>
+    </main>
+    <noscript>This site needs JavaScript.</noscript>
+    <script src="vendor/codemirror.js?v=1"></script>
+    <script type="module" src="app.js?v=1"></script>
+  </body>
+</html>
