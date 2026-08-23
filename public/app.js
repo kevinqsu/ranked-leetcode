@@ -80,7 +80,9 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (text) =>
   String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const displayName = () => (state.name.trim() || "Guest").slice(0, 20);
+const lockedName = () => (state.view?.me?.linked && state.view.me.leetcodeUser ? state.view.me.leetcodeUser : "");
+const displayName = () => lockedName() || (state.name.trim() || "Guest").slice(0, 20);
+const formatRecord = (record) => (record ? `${record.wins}–${record.losses}` : "");
 const me = () => state.view?.me?.id || state.session;
 
 function saveSettings() {
@@ -396,7 +398,7 @@ function applyView(view) {
   state.view = view;
   $("online-pill").textContent = `${view.online} online`;
   updateLcButton();
-  if (view.me?.linked && view.me.leetcodeUser && !state.name.trim()) setName(view.me.leetcodeUser);
+  if (view.me?.linked && view.me.leetcodeUser && state.name !== view.me.leetcodeUser) setName(view.me.leetcodeUser);
   const watchedKey = view.duel && view.duel.spectators ? `${view.duel.id}:${view.duel.spectators.join("|")}` : "";
   if (watchedKey !== share.watchedKey) {
     share.watchedKey = watchedKey;
@@ -463,6 +465,7 @@ function renderHome() {
         <aside class="side">
           <div><h2>Challenges</h2><div class="list" id="challenge-list"></div></div>
           <div><h2>Spectate</h2><div class="list" id="game-list"></div></div>
+          <div><h2>Records</h2><div class="records" id="record-list"></div></div>
           <div class="side-foot">First to pass the examples wins.<br />Python 3 runs in your browser.</div>
         </aside>
         <section class="main" id="home-main"></section>
@@ -485,7 +488,7 @@ function updateSidebar() {
         .map(
           (c) => `
           <button type="button" data-accept="${escapeHtml(c.id)}" ${state.busy ? "disabled" : ""} title="Accept this challenge">
-            <div class="row"><strong>${escapeHtml(c.creatorName)}</strong><span>${escapeHtml(c.difficulty)}</span></div>
+            <div class="row"><strong>${escapeHtml(c.creatorName)}${c.creatorRecord ? ` <span class="wl-inline">${formatRecord(c.creatorRecord)}</span>` : ""}</strong><span>${escapeHtml(c.difficulty)}</span></div>
             <div class="sub">${c.problem ? `#${escapeHtml(c.problem.id)} ${escapeHtml(c.problem.title)}` : "Random problem"}${c.judging === "leetcode" ? " · LeetCode judged" : ""}</div>
           </button>`,
         )
@@ -505,6 +508,18 @@ function updateSidebar() {
     : `<div class="empty-list">No duels in progress</div>`;
   challenges.querySelectorAll("[data-accept]").forEach((button) => button.addEventListener("click", () => acceptChallenge(button.dataset.accept)));
   games.querySelectorAll("[data-watch]").forEach((button) => button.addEventListener("click", () => watchDuel(button.dataset.watch)));
+  const records = $("record-list");
+  if (records) {
+    const list = view?.records || [];
+    const mine = (view?.me?.leetcodeUser || "").toLowerCase();
+    records.innerHTML = list.length
+      ? list
+          .map(
+            (r, i) => `<div class="record-row ${r.username.toLowerCase() === mine ? "me" : ""}"><span class="rank">${i + 1}</span><span class="who">${escapeHtml(r.username)}</span><span class="wl">${r.wins}–${r.losses}</span></div>`,
+          )
+          .join("")
+      : `<div class="empty-list">Link a LeetCode account and duel to start a record.</div>`;
+  }
 }
 
 function updateHomeMain() {
@@ -536,7 +551,8 @@ function updateHomeMain() {
       <h1>LeetCode 1v1</h1>
       <p class="lead">Same problem, same clock. First accepted solution wins.</p>
       <label class="control-label" for="name">Name</label>
-      <input id="name" class="text-input" maxlength="20" placeholder="Guest" value="${escapeHtml(state.name)}" />
+      <input id="name" class="text-input" maxlength="30" placeholder="Guest" value="${escapeHtml(state.name)}" />
+      <p class="hint" id="name-hint"></p>
       <fieldset class="control-group">
         <legend>Difficulty</legend>
         <div class="segments three" id="difficulty-segments">
@@ -621,6 +637,15 @@ function syncSetupForm() {
   form.querySelectorAll("[data-difficulty]").forEach((b) => b.classList.toggle("selected", b.dataset.difficulty === s.difficulty));
   form.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("selected", b.dataset.mode === s.mode));
   const linked = !!state.view?.me?.linked;
+  const nameInput = $("name");
+  const locked = !!lockedName();
+  nameInput.readOnly = locked;
+  nameInput.classList.toggle("locked", locked);
+  if (locked && nameInput.value !== lockedName()) nameInput.value = lockedName();
+  const record = state.view?.me?.record;
+  $("name-hint").textContent = locked
+    ? `🔒 Your LeetCode username${record ? ` · record ${formatRecord(record)}` : ""} (unlink to change)`
+    : "";
   const leetButton = form.querySelector('[data-judging="leetcode"]');
   leetButton.disabled = !linked;
   if (!linked && s.judging === "leetcode") s.judging = "examples";
@@ -1693,7 +1718,7 @@ function updateBar() {
     if (state.mode === "duel") {
       const opponent = duel.players.find((p) => p.id !== me());
       if (opponent) {
-        centerHtml += `<span class="status-line"><span class="dot ${opponent.online ? "online" : ""}" title="${opponent.online ? "online" : "offline"}"></span><strong>${escapeHtml(opponent.name)}</strong><span>${escapeHtml(playerStatus(opponent))}</span></span>`;
+        centerHtml += `<span class="status-line"><span class="dot ${opponent.online ? "online" : ""}" title="${opponent.online ? "online" : "offline"}"></span><strong>${escapeHtml(opponent.name)}</strong>${opponent.record ? `<span class="wl-inline" title="Win–loss record">${formatRecord(opponent.record)}</span>` : ""}<span>${escapeHtml(playerStatus(opponent))}</span></span>`;
       }
     }
     centerHtml += `<span class="timer" id="duel-timer">${formatDuration(duelElapsed(duel))}</span>`;
@@ -1763,6 +1788,8 @@ function updateGameOver() {
     headline = mine ? "You won!" : `${escapeHtml(duel.winnerName || "Opponent")} won`;
     sub = `Solved in ${formatDuration(duelElapsed(duel))}`;
   }
+  const myRecord = duel.players.find((p) => p.id === me())?.record;
+  if (myRecord) sub += `${sub ? " · " : ""}Your record: ${formatRecord(myRecord)}`;
   const iWant = duel.players.find((p) => p.id === me())?.wantsRematch;
   const theyWant = opponent?.wantsRematch;
   const opponentGone = !opponent || !opponent.online || opponent.left;
@@ -1980,7 +2007,7 @@ function updateSpectate(duel) {
     card.classList.toggle("winner", duel.winnerId === player.id);
     const dot = card.querySelector(".dot");
     dot.className = `dot ${player.online ? "online" : ""}`;
-    card.querySelector(".name-text").textContent = player.name + (duel.winnerId === player.id ? " · winner" : "");
+    card.querySelector(".name-text").textContent = player.name + (player.record ? ` (${formatRecord(player.record)})` : "") + (duel.winnerId === player.id ? " · winner" : "");
     card.querySelector(".spectator-stats").textContent = playerStatus(player) + (player.vetoed ? " · wants a new problem" : "");
     const entry = (duel.codes || {})[player.id];
     if (entry) {

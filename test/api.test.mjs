@@ -192,6 +192,23 @@ try {
   const state = JSON.parse(fs.readFileSync(path.join(dataDir, "state.json"), "utf8"));
   check("state persisted", Object.keys(state.duels).length >= 2 && state.users[A].name === "Alice");
 
+  // Records + name lock (mock link)
+  const link = await post("/api/leetcode/link", { sessionId: A, session: "mocksession", csrf: "alice_csrf" });
+  check("mock link works", link.status === 200 && link.body.username === "mock_alice_cs", link.body);
+  const renamed = await post("/api/duels", { action: "hello", sessionId: A, name: "Someone Else" });
+  check("linked name is locked to the username", renamed.body.view.me.name === "mock_alice_cs", renamed.body.view.me);
+  check("fresh record is 0-0", renamed.body.view.me.record.wins === 0 && renamed.body.view.me.record.losses === 0);
+  // Alice (linked) vs Bob (guest): Alice wins -> record 1-0, Bob unchanged (no username)
+  await post("/api/duels", { action: "leave", sessionId: B, duelId: accepted.body.duel.id, forfeit: true });
+  const postForfeit = (await get(`/api/view?sessionId=${A}`)).body;
+  check("forfeit counts as a win on the record", postForfeit.me.record.wins === 1 && postForfeit.me.record.losses === 0, postForfeit.me);
+  check("records leaderboard lists the username", postForfeit.records.length === 1 && postForfeit.records[0].username === "mock_alice_cs" && postForfeit.records[0].wins === 1, postForfeit.records);
+  await post("/api/leetcode/unlink", { sessionId: A });
+  const unlinked = await post("/api/duels", { action: "hello", sessionId: A, name: "Alice Again" });
+  check("name editable again after unlinking", unlinked.body.view.me.name === "Alice Again" && unlinked.body.view.me.record === null);
+  check("record survives unlinking", unlinked.body.view.records[0].wins === 1);
+
+
   a.ws.close(); b.ws.close(); c.ws.close();
 } catch (error) {
   failures += 1;

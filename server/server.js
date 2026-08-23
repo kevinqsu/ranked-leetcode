@@ -277,6 +277,7 @@ async function handleApi(req, res, url) {
     if (cookies.session.length > 4096 || cookies.csrf.length > 256) throw new DuelError("Cookie values look wrong.", 400);
     const { username } = await verifyCookies(cookies);
     user.leetcode = { ...cookies, username, linkedAt: Date.now() };
+    engine.touch(sessionId); // locks the display name to the LeetCode username
     engine.changed();
     return send(res, 200, { username });
   }

@@ -67,6 +67,9 @@ try {
   await alice.waitForFunction(() => document.querySelector("#lc-button")?.textContent?.includes("mock_csrf1234"), null, { timeout: 5000 });
   check("account linked", true);
   check("name autofilled from LeetCode username", (await alice.inputValue("#name")) === "mock_csrf1234", await alice.inputValue("#name"));
+  check("name input is locked while linked", await alice.$eval("#name", (el) => el.readOnly) && /unlink to change/.test(await alice.textContent("#name-hint")));
+  check("leetcode logo in the header", (await alice.$("#home-button svg.lc-logo")) !== null);
+  check("favicon is the leetcode mark", /image\/svg\+xml/.test(await alice.$eval('link[rel="icon"]', (l) => l.href)));
   await alice.waitForFunction(() => !document.querySelector('[data-judging="leetcode"]')?.disabled);
   await alice.click('[data-judging="leetcode"]');
   check("leetcode judging selectable after linking", await alice.$eval('[data-judging="leetcode"]', (b) => b.classList.contains("selected")));
@@ -175,6 +178,12 @@ try {
   await bob.screenshot({ path: path.join(shots, "13-after-loss-light.png") });
   await bob.click("#show-result");
   check("banner can be reopened", !!(await bob.$(".game-over")));
+  check("winner's banner shows the record", /Your record: 1–0/.test(await alice.textContent(".game-over")), await alice.textContent(".game-over"));
+  await alice.click("#menu-button");
+  await alice.waitForSelector(".setup", { timeout: 5000 });
+  await alice.waitForFunction(() => /mock_csrf1234/.test(document.querySelector("#record-list")?.textContent || ""), null, { timeout: 5000 });
+  check("records sidebar lists the linked winner", /1–0/.test(await alice.textContent("#record-list")));
+  await alice.screenshot({ path: path.join(shots, "14-records-home.png") });
 
   check("no page errors", errors.filter((e) => !/ERR_TUNNEL|Failed to load resource/.test(e)).length === 0, errors.join("\n"));
 } catch (error) {

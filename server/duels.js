@@ -21,12 +21,12 @@ export class DuelError extends Error {
   }
 }
 
-export function cleanName(value) {
+export function cleanName(value, max = 20) {
   const text = String(value ?? "")
     .replace(/[\x00-\x1f\x7f]/g, "")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 20);
+    .slice(0, max);
   return text || "Guest";
 }
 
@@ -40,6 +40,7 @@ export class DuelEngine {
     this.state = store.data;
     this.state.users ||= {};
     this.state.duels ||= {};
+    this.state.records ||= {}; // leetcode username (lower-case) -> {username, wins, losses, lastPlayed}
     this.connections = new Map(); // sessionId -> Set<WsConnection>
     this.lastSeen = new Map(); // sessionId -> timestamp (polling clients)
     this.watching = new Map(); // sessionId -> duelId
@@ -56,7 +57,9 @@ export class DuelEngine {
     if (!isValidSessionId(sessionId)) throw new DuelError("Invalid session.", 400);
     const users = this.state.users;
     const user = (users[sessionId] ||= { name: "Guest", createdAt: Date.now() });
-    if (name !== undefined) user.name = cleanName(name);
+    // A linked account locks the display name to the LeetCode username.
+    if (user.leetcode?.username) user.name = cleanName(user.leetcode.username, 30);
+    else if (name !== undefined) user.name = cleanName(name);
     user.lastSeen = Date.now();
     this.lastSeen.set(sessionId, Date.now());
     this.store.save();
@@ -70,6 +73,38 @@ export class DuelEngine {
   isLinked(sessionId) {
     const user = this.user(sessionId);
     return !!(user && user.leetcode && user.leetcode.session);
+  }
+
+  // ------------------------------------------------------------ records (per LeetCode username)
+
+  recordFor(sessionId) {
+    const username = this.user(sessionId)?.leetcode?.username;
+    if (!username) return null;
+    const record = this.state.records[username.toLowerCase()];
+    return record ? { wins: record.wins || 0, losses: record.losses || 0 } : { wins: 0, losses: 0 };
+  }
+
+  recordResult(duel) {
+    if (duel.status !== "complete" || !duel.winnerId) return;
+    if (duel.endReason !== "solved" && duel.endReason !== "forfeit") return;
+    for (const id of [duel.creatorId, duel.opponentId]) {
+      const username = this.user(id)?.leetcode?.username;
+      if (!username) continue;
+      const key = username.toLowerCase();
+      const record = (this.state.records[key] ||= { username, wins: 0, losses: 0, lastPlayed: 0 });
+      record.username = username;
+      if (id === duel.winnerId) record.wins += 1;
+      else record.losses += 1;
+      record.lastPlayed = Date.now();
+    }
+  }
+
+  topRecords(limit = 10) {
+    return Object.values(this.state.records)
+      .filter((r) => r && r.username)
+      .sort((a, b) => b.wins - a.wins || a.losses - b.losses || b.lastPlayed - a.lastPlayed)
+      .slice(0, limit)
+      .map((r) => ({ username: r.username, wins: r.wins || 0, losses: r.losses || 0 }));
   }
 
   // -------------------------------------------------------------------- presence
@@ -191,6 +226,7 @@ export class DuelEngine {
         vetoed: role === "creator" ? !!duel.vetoCreator : !!duel.vetoOpponent,
         wantsRematch: !!(duel.rematch && duel.rematch[id]),
         left: !!(duel.dismissed && duel.dismissed[id]),
+        record: this.recordFor(id),
       });
     }
     return {
@@ -228,6 +264,7 @@ export class DuelEngine {
         problem: d.requestedSlug ? { id: d.requestedId, title: d.requestedTitle } : null,
         createdAt: d.createdAt,
         online: this.isOnline(d.creatorId),
+        creatorRecord: this.recordFor(d.creatorId),
       }));
     const games = duels
       .filter((d) => d.status === "active")
@@ -249,7 +286,9 @@ export class DuelEngine {
         name: user ? user.name : "Guest",
         linked: this.isLinked(sessionId),
         leetcodeUser: user?.leetcode?.username || null,
+        record: this.recordFor(sessionId),
       },
+      records: this.topRecords(),
       online: this.onlineCount(),
       challenges,
       games,
@@ -425,6 +464,7 @@ export class DuelEngine {
       duel.winnerId = winnerId;
       duel.winnerName = winnerId === duel.creatorId ? duel.creatorName : duel.opponentName;
     }
+    this.recordResult(duel);
     this.changed();
   }
 
