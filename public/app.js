@@ -163,6 +163,7 @@ function connect() {
       return;
     }
     if (message.type === "view") applyView(message.view);
+    else if (message.type === "code") applyLiveCode(message);
   };
   ws.onclose = () => {
     clearTimeout(openTimer);
@@ -297,7 +298,10 @@ const editor = {
             CM.indentUnit.of("    "),
             this.themeCompartment.of(currentTheme() === "dark" ? CM.oneDark : []),
             CM.EditorView.updateListener.of((update) => {
-              if (update.docChanged) scheduleCodeSave();
+              if (update.docChanged) {
+                scheduleCodeSave();
+                scheduleCodeShare();
+              }
             }),
           ],
         }),
@@ -309,7 +313,10 @@ const editor = {
     textarea.className = "editor-fallback";
     textarea.spellcheck = false;
     textarea.value = doc;
-    textarea.addEventListener("input", scheduleCodeSave);
+    textarea.addEventListener("input", () => {
+      scheduleCodeSave();
+      scheduleCodeShare();
+    });
     textarea.addEventListener("keydown", (event) => {
       if (event.key === "Tab") {
         event.preventDefault();
@@ -390,6 +397,11 @@ function applyView(view) {
   $("online-pill").textContent = `${view.online} online`;
   updateLcButton();
   if (view.me?.linked && view.me.leetcodeUser && !state.name.trim()) setName(view.me.leetcodeUser);
+  const watchedKey = view.duel && view.duel.spectators ? `${view.duel.id}:${view.duel.spectators.join("|")}` : "";
+  if (watchedKey !== share.watchedKey) {
+    share.watchedKey = watchedKey;
+    if (watchedKey && state.mode === "duel" && state.problem) setTimeout(() => shareCode(true), 50);
+  }
 
   if (state.mode === "spectate") {
     if (!view.watch) return goHome("That duel is over.");
@@ -723,6 +735,7 @@ async function acceptChallenge(duelId) {
 async function watchDuel(duelId) {
   try {
     await duelAction("watch", { duelId });
+    destroySpectateEditors();
     state.mode = "spectate";
     state.duelId = duelId;
     state.problem = null;
@@ -738,6 +751,7 @@ function goHome(message) {
   if (state.mode === "spectate") {
     duelAction("watch", { duelId: null }).catch(() => {});
     wsSend({ type: "watch", duelId: null });
+    destroySpectateEditors();
   }
   state.mode = "home";
   state.duelId = null;
@@ -878,6 +892,7 @@ function loadProblem(problem) {
   state.activeSubmission = null;
   state.leftTab = "description";
   state.metric = "runtime";
+  state.lastRun = null;
   renderWorkspace();
   py.ensure().catch(() => {});
 }
@@ -1487,6 +1502,9 @@ async function runCode(mode) {
       const firstBad = statuses.findIndex((s) => s === "bad");
       state.results.run = { results, cases, statuses, at: Date.now() };
       state.results.selectedCase = firstBad >= 0 ? firstBad : clamp(state.activeCase, 0, cases.length - 1);
+      const judged = statuses.filter((st) => st !== "neutral");
+      state.lastRun = { kind: "run", verdict: runVerdict(state.results.run), passed: judged.filter((st) => st === "good").length, total: judged.length, at: Date.now() };
+      shareCode(true);
     }
   } catch (error) {
     const failure = { stdout: "", trace: [], actual: null, error: error.message, durationMs: 0 };
@@ -1579,6 +1597,8 @@ async function submitCode() {
     state.results.running = false;
     state.submitting = false;
   }
+  state.lastRun = { kind: "submit", verdict: record.verdict, passed: record.passed, total: record.total, at: Date.now() };
+  shareCode(true);
   state.submissions.unshift(record);
   state.submissions = state.submissions.slice(0, 15);
   saveSubmissions();
@@ -1677,6 +1697,9 @@ function updateBar() {
       }
     }
     centerHtml += `<span class="timer" id="duel-timer">${formatDuration(duelElapsed(duel))}</span>`;
+    if (state.mode === "duel" && duel.spectators && duel.spectators.length) {
+      centerHtml += `<span class="watchers" title="Spectators can see your code">👁 ${escapeHtml(duel.spectators.slice(0, 3).join(", "))}${duel.spectators.length > 3 ? ` +${duel.spectators.length - 3}` : ""}</span>`;
+    }
   }
   center.innerHTML = centerHtml;
 
@@ -1777,66 +1800,231 @@ function updateGameOver() {
 }
 
 // ---------------------------------------------------------------------------
-// spectate
+// spectate — both players' editors mirrored live (read-only), plus their status
+
+const spectate = { editors: {}, duelId: null, lastStatus: "" };
 
 function renderSpectate() {
   const duel = state.view?.watch;
   if (!duel) return;
   if (duel.problem && (!state.problem || state.problem.titleSlug !== duel.problem.slug)) {
+    if (renderSpectate.loading === duel.problem.slug) return;
+    renderSpectate.loading = duel.problem.slug;
     api(`/api/problem?slug=${encodeURIComponent(duel.problem.slug)}`)
       .then(({ problem }) => {
         if (state.mode !== "spectate") return;
         state.problem = problem;
-        renderSpectateShell(problem);
-        renderSpectateCards();
+        renderSpectateShell(problem, duel);
+        updateSpectate(duel);
       })
-      .catch((error) => toast(error.message));
+      .catch((error) => toast(error.message))
+      .finally(() => {
+        renderSpectate.loading = null;
+      });
     return;
   }
-  if (!document.querySelector(".workspace.spectating") && state.problem) renderSpectateShell(state.problem);
-  renderSpectateCards();
+  if ((!document.querySelector(".workspace.spectating") || spectate.duelId !== duel.id) && state.problem) renderSpectateShell(state.problem, duel);
+  updateSpectate(duel);
   updateBar();
 }
 
-function renderSpectateShell(problem) {
+function renderSpectateShell(problem, duel) {
   editor.destroy();
+  destroySpectateEditors();
+  spectate.duelId = duel.id;
   $("screen").innerHTML = `
-    <div class="workspace spectating">
+    <div class="workspace spectating" style="--left-pct:${paneSizes.left}%">
       <section class="problem-pane">
-        <div class="pane-title"><span>Description</span><span class="grow"></span><a class="link-button" href="${escapeHtml(problem.sourceUrl)}" target="_blank" rel="noopener">Open on LeetCode ↗</a></div>
+        <div class="pane-title tabs"><span class="tab active">Description</span><span class="grow"></span><a class="link-button" href="${escapeHtml(problem.sourceUrl)}" target="_blank" rel="noopener">LeetCode ↗</a></div>
         <div class="problem-scroll">
           <div class="problem-heading">
             <h1>${escapeHtml(problem.id)}. ${escapeHtml(problem.title)}</h1>
-            <div class="problem-meta"><span class="difficulty ${problem.difficulty.toLowerCase()}">${escapeHtml(problem.difficulty)}</span></div>
+            <div class="problem-meta"><span class="difficulty ${problem.difficulty.toLowerCase()}">${escapeHtml(problem.difficulty)}</span>${(problem.tags || []).slice(0, 5).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
           </div>
           <div class="problem-content">${problem.content}</div>
         </div>
       </section>
+      <div class="gutter vertical" id="gutter-v" title="Drag to resize"></div>
       <section class="spectate-panel">
-        <div class="pane-title"><span>Spectating</span></div>
-        <div class="player-cards" id="player-cards"></div>
+        <div class="spectate-status" id="spectate-status"></div>
+        <div class="spectate-grid">
+          ${duel.players
+            .map(
+              (p) => `
+            <div class="spectator-card player-card" data-player="${escapeHtml(p.id)}">
+              <div class="pane-title spectator-head">
+                <h3 class="spectator-name"><span class="dot"></span><span class="name-text"></span></h3>
+                <span class="muted spectator-stats"></span>
+                <span class="grow"></span>
+                <span class="muted spectator-run"></span>
+              </div>
+              <div class="editor-wrap spectate-editor"></div>
+            </div>`,
+            )
+            .join("")}
+        </div>
       </section>
     </div>`;
+  for (const player of duel.players) {
+    const card = document.querySelector(`.spectator-card[data-player="${CSS.escape(player.id)}"]`);
+    spectate.editors[player.id] = createReadOnlyEditor(card.querySelector(".spectate-editor"), "");
+  }
+  installSpectateGutter();
+  const codes = duel.codes || {};
+  for (const [playerId, entry] of Object.entries(codes)) applyLiveCode({ duelId: duel.id, playerId, ...entry });
   updateBar();
 }
 
-function renderSpectateCards() {
-  const duel = state.view?.watch;
-  const cards = $("player-cards");
-  if (!duel || !cards) return;
-  cards.innerHTML =
-    duel.players
-      .map(
-        (p) => `
-      <div class="player-card ${duel.winnerId === p.id ? "winner" : ""}">
-        <h3><span class="dot ${p.online ? "online" : ""}"></span>${escapeHtml(p.name)}${duel.winnerId === p.id ? " · winner" : ""}</h3>
-        <div class="meta">${escapeHtml(playerStatus(p))}${p.vetoed ? " · wants a new problem" : ""}</div>
-      </div>`,
-      )
-      .join("") +
-    (duel.status === "complete"
-      ? `<div class="player-card"><h3>${duel.endReason === "expired" ? "Duel expired" : `${escapeHtml(duel.winnerName || "")} won`}</h3><div class="meta">${duel.endReason === "solved" ? `Solved in ${formatDuration(duelElapsed(duel))}` : duel.endReason === "forfeit" ? "By forfeit" : ""}</div></div>`
-      : `<div class="player-card"><div class="meta">${duel.judging === "leetcode" ? "Judged on LeetCode submissions" : "First to pass all examples wins"} · ${escapeHtml(duel.difficulty)}</div></div>`);
+function createReadOnlyEditor(container, doc) {
+  const CM = window.CM;
+  if (CM && CM.EditorView) {
+    const view = new CM.EditorView({
+      state: CM.EditorState.create({
+        doc,
+        extensions: [
+          CM.basicSetup,
+          CM.python(),
+          CM.EditorState.readOnly.of(true),
+          CM.EditorView.editable.of(false),
+          currentTheme() === "dark" ? CM.oneDark : [],
+        ],
+      }),
+      parent: container,
+    });
+    return {
+      setCode(code) {
+        if (view.state.doc.toString() === code) return;
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: code } });
+      },
+      destroy() {
+        view.destroy();
+      },
+    };
+  }
+  const textarea = document.createElement("textarea");
+  textarea.className = "editor-fallback";
+  textarea.readOnly = true;
+  textarea.value = doc;
+  container.appendChild(textarea);
+  return {
+    setCode(code) {
+      textarea.value = code;
+    },
+    destroy() {
+      textarea.remove();
+    },
+  };
+}
+
+function destroySpectateEditors() {
+  for (const entry of Object.values(spectate.editors)) entry.destroy();
+  spectate.editors = {};
+  spectate.duelId = null;
+}
+
+function installSpectateGutter() {
+  const workspace = document.querySelector(".workspace.spectating");
+  const gutter = $("gutter-v");
+  if (!workspace || !gutter) return;
+  gutter.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    gutter.setPointerCapture(event.pointerId);
+    gutter.classList.add("dragging");
+    document.body.classList.add("resizing");
+    const move = (e) => {
+      const rect = workspace.getBoundingClientRect();
+      paneSizes.left = clamp(((e.clientX - rect.left) / rect.width) * 100, 25, 70);
+      workspace.style.setProperty("--left-pct", `${paneSizes.left}%`);
+    };
+    const stop = () => {
+      gutter.removeEventListener("pointermove", move);
+      gutter.removeEventListener("pointerup", stop);
+      gutter.removeEventListener("pointercancel", stop);
+      gutter.classList.remove("dragging");
+      document.body.classList.remove("resizing");
+      storageSet("duel-pane-left", String(Math.round(paneSizes.left)));
+    };
+    gutter.addEventListener("pointermove", move);
+    gutter.addEventListener("pointerup", stop);
+    gutter.addEventListener("pointercancel", stop);
+  });
+}
+
+function describeRun(lastRun) {
+  if (!lastRun || !lastRun.verdict) return "";
+  const ago = Math.max(0, Math.round((Date.now() - (lastRun.at || Date.now())) / 1000));
+  const when = ago < 5 ? "just now" : ago < 60 ? `${ago}s ago` : `${Math.floor(ago / 60)}m ago`;
+  const score = lastRun.total ? ` ${lastRun.passed}/${lastRun.total}` : "";
+  return `${lastRun.kind === "submit" ? "Submitted" : "Ran"}: ${lastRun.verdict}${score} · ${when}`;
+}
+
+function updateSpectate(duel) {
+  const status = $("spectate-status");
+  if (!status) return;
+  let text;
+  if (duel.status === "complete") {
+    const how = duel.endReason === "solved" ? `solved in ${formatDuration(duelElapsed(duel))}` : duel.endReason === "forfeit" ? "by forfeit" : "";
+    text = duel.endReason === "expired" ? "Duel expired — no winner." : `<strong>${escapeHtml(duel.winnerName || "")}</strong> won${how ? ` · ${how}` : ""}.`;
+    if (duel.rematchDuelId) text += ` <button type="button" class="link-button" id="watch-rematch">Watch the rematch →</button>`;
+  } else {
+    text = `${duel.judging === "leetcode" ? "Judged on LeetCode submissions" : "First to pass all examples wins"} · ${escapeHtml(duel.difficulty)} · ${duel.players.filter((p) => p.vetoed).length}/2 vetoes`;
+  }
+  if (text !== spectate.lastStatus) {
+    status.innerHTML = text;
+    spectate.lastStatus = text;
+    $("watch-rematch")?.addEventListener("click", () => watchDuel(duel.rematchDuelId));
+  }
+  for (const player of duel.players) {
+    const card = document.querySelector(`.spectator-card[data-player="${CSS.escape(player.id)}"]`);
+    if (!card) continue;
+    card.classList.toggle("winner", duel.winnerId === player.id);
+    const dot = card.querySelector(".dot");
+    dot.className = `dot ${player.online ? "online" : ""}`;
+    card.querySelector(".name-text").textContent = player.name + (duel.winnerId === player.id ? " · winner" : "");
+    card.querySelector(".spectator-stats").textContent = playerStatus(player) + (player.vetoed ? " · wants a new problem" : "");
+    const entry = (duel.codes || {})[player.id];
+    if (entry) {
+      spectate.editors[player.id]?.setCode(entry.code || "");
+      card.querySelector(".spectator-run").textContent = describeRun(entry.lastRun);
+    }
+  }
+}
+
+function applyLiveCode(message) {
+  if (state.mode !== "spectate" || message.duelId !== spectate.duelId) return;
+  const entry = spectate.editors[message.playerId];
+  if (!entry) return;
+  entry.setCode(message.code || "");
+  const card = document.querySelector(`.spectator-card[data-player="${CSS.escape(message.playerId)}"]`);
+  if (card) card.querySelector(".spectator-run").textContent = describeRun(message.lastRun);
+}
+
+// Players: stream the editor contents while someone is watching.
+const share = { timer: null, lastSent: "", watchedKey: "" };
+
+function watchedByAnyone() {
+  const duel = state.mode === "duel" ? myDuel() : null;
+  return !!(duel && (duel.status === "active" || duel.status === "complete") && duel.spectators && duel.spectators.length);
+}
+
+function shareCode(force = false) {
+  clearTimeout(share.timer);
+  share.timer = null;
+  const duel = state.mode === "duel" ? myDuel() : null;
+  if (!duel || !state.problem || !watchedByAnyone()) return;
+  const code = editor.getCode();
+  const key = `${duel.id}:${code}:${state.lastRun?.at || 0}`;
+  if (!force && key === share.lastSent) return;
+  share.lastSent = key;
+  const message = { type: "code", duelId: duel.id, code, lastRun: state.lastRun || null };
+  if (live.ws && live.ws.readyState === WebSocket.OPEN) wsSend(message);
+  else duelAction("code", { duelId: duel.id, code, lastRun: state.lastRun || null }).catch(() => {});
+}
+
+function scheduleCodeShare() {
+  if (!watchedByAnyone()) return;
+  clearTimeout(share.timer);
+  share.timer = setTimeout(() => shareCode(false), 400);
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,7 @@ export class DuelEngine {
     this.connections = new Map(); // sessionId -> Set<WsConnection>
     this.lastSeen = new Map(); // sessionId -> timestamp (polling clients)
     this.watching = new Map(); // sessionId -> duelId
+    this.liveCode = new Map(); // duelId -> Map<sessionId, {code, at, lastRun}> (spectator feed, memory only)
     this.broadcastTimer = null;
     this.bootedAt = Date.now();
     this.cleanupTimer = setInterval(() => this.cleanup(), 10 * 1000);
@@ -101,9 +102,55 @@ export class DuelEngine {
   }
 
   watch(sessionId, duelId) {
-    if (duelId && this.state.duels[duelId]) this.watching.set(sessionId, duelId);
+    const duel = duelId ? this.state.duels[duelId] : null;
+    if (duel && duel.creatorId !== sessionId && duel.opponentId !== sessionId) this.watching.set(sessionId, duelId);
     else this.watching.delete(sessionId);
     this.changed();
+  }
+
+  watchersOf(duelId) {
+    const ids = [];
+    for (const [sessionId, id] of this.watching) if (id === duelId && this.isOnline(sessionId)) ids.push(sessionId);
+    return ids;
+  }
+
+  spectatorNames(duel) {
+    return this.watchersOf(duel.id)
+      .slice(0, 12)
+      .map((id) => this.user(id)?.name || "Guest");
+  }
+
+  codesFor(duel) {
+    const entries = this.liveCode.get(duel.id);
+    const codes = {};
+    if (!entries) return codes;
+    for (const [playerId, entry] of entries) codes[playerId] = entry;
+    return codes;
+  }
+
+  // A player's editor contents (debounced client-side, only sent while someone watches).
+  setLiveCode({ sessionId, duelId, code, lastRun }) {
+    const duel = typeof duelId === "string" ? this.state.duels[duelId] : null;
+    if (!duel || (duel.creatorId !== sessionId && duel.opponentId !== sessionId)) return false;
+    if (duel.status !== "active" && duel.status !== "complete") return false;
+    if (!this.liveCode.has(duel.id)) this.liveCode.set(duel.id, new Map());
+    const entry = {
+      code: String(code || "").slice(0, 64 * 1024),
+      at: Date.now(),
+      lastRun: lastRun && typeof lastRun === "object" ? {
+        kind: lastRun.kind === "submit" ? "submit" : "run",
+        verdict: String(lastRun.verdict || "").slice(0, 40),
+        passed: Number(lastRun.passed) || 0,
+        total: Number(lastRun.total) || 0,
+        at: Number(lastRun.at) || Date.now(),
+      } : null,
+    };
+    this.liveCode.get(duel.id).set(sessionId, entry);
+    const payload = JSON.stringify({ type: "code", duelId: duel.id, playerId: sessionId, ...entry });
+    for (const watcherId of this.watchersOf(duel.id)) {
+      for (const conn of this.connections.get(watcherId) || []) conn.send(payload);
+    }
+    return true;
   }
 
   // ------------------------------------------------------------------- views
@@ -122,7 +169,7 @@ export class DuelEngine {
     return best;
   }
 
-  publicDuel(duel) {
+  publicDuel(duel, { forWatcher = false } = {}) {
     if (!duel) return null;
     const players = [];
     for (const [role, id, name] of [
@@ -162,6 +209,8 @@ export class DuelEngine {
       winnerName: duel.winnerName || null,
       endReason: duel.endReason || null,
       rematchDuelId: duel.rematchDuelId || null,
+      spectators: this.spectatorNames(duel),
+      codes: forWatcher ? this.codesFor(duel) : undefined,
     };
   }
 
@@ -205,7 +254,7 @@ export class DuelEngine {
       challenges,
       games,
       duel: this.publicDuel(this.currentDuel(sessionId)),
-      watch: watchId ? this.publicDuel(this.state.duels[watchId]) : null,
+      watch: watchId ? this.publicDuel(this.state.duels[watchId], { forWatcher: true }) : null,
     };
   }
 
@@ -552,6 +601,7 @@ export class DuelEngine {
         }
       } else if (now - (duel.endedAt || duel.updatedAt) > FINISHED_RETENTION) {
         delete this.state.duels[duel.id];
+        this.liveCode.delete(duel.id);
         dirty = true;
       }
     }

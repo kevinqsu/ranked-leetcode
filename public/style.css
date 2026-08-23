@@ -355,12 +355,22 @@ body.resizing .cm-editor { pointer-events: none; }
 .trace-row > span { color: var(--orange); }
 .trace-row code { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.spectate-panel { padding: 0; }
-.player-cards { display: grid; gap: 10px; padding: 14px; }
-.player-card { border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; background: var(--surface); }
-.player-card h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-.player-card .meta { color: var(--muted); font-size: 12px; }
-.player-card.winner { border-color: var(--green); }
+.spectate-panel { padding: 0; background: none; border: 0; display: flex; flex-direction: column; min-height: 0; gap: 8px; }
+.spectate-status { flex: 0 0 auto; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: 8px 12px; font-size: 13px; color: var(--muted); }
+.spectate-status strong { color: var(--text); }
+.spectate-status .link-button { background: none; border: 0; color: var(--orange); padding: 0; font-size: 13px; }
+.spectate-grid { flex: 1; min-height: 0; display: grid; grid-template-rows: 1fr 1fr; gap: 8px; }
+.spectator-card { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); overflow: hidden; }
+.spectator-card.winner { border-color: var(--green); }
+.spectator-head { gap: 10px; }
+.spectator-name { margin: 0; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.spectator-stats, .spectator-run { font-size: 12px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spectate-editor { flex: 1; min-height: 0; }
+.spectate-editor .cm-editor { height: 100%; font-size: 12.5px; }
+.spectate-editor .cm-scroller { font-family: "Cascadia Code", SFMono-Regular, Consolas, monospace; line-height: 1.5; }
+.spectate-editor .cm-activeLine, .spectate-editor .cm-activeLineGutter { background: transparent; }
+.watchers { color: var(--muted); white-space: nowrap; font-size: 12px; }
+.player-card h3 { margin: 0; }
 
 .game-over {
   position: fixed;
@@ -414,6 +424,8 @@ body.resizing .cm-editor { pointer-events: none; }
 @media (max-width: 860px) {
   .workspace { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 46px); overflow: visible; gap: 8px; }
   .workspace.spectating { grid-template-columns: 1fr; }
+  .spectate-panel { min-height: 90vh; }
+  .spectate-grid { grid-template-rows: minmax(300px, 1fr) minmax(300px, 1fr); }
   .gutter { display: none; }
   .problem-pane { min-height: 50vh; }
   .code-pane { min-height: 85vh; grid-template-rows: minmax(300px, 60%) 8px minmax(200px, 1fr); }

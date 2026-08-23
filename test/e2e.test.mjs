@@ -203,6 +203,14 @@ try {
   await cara.click("#game-list button[data-watch]");
   await cara.waitForSelector(".workspace.spectating .player-card", { timeout: 15000 });
   check("spectator sees both players", (await cara.$$eval(".player-card h3", (h) => h.map((x) => x.textContent).join(" "))).includes("Alice"));
+  await alice.waitForFunction(() => /👁/.test(document.querySelector("#bar-center")?.textContent || ""), null, { timeout: 5000 });
+  check("players see who is watching", /Cara/.test(await alice.textContent("#bar-center")));
+  await setCode(alice, "class Solution:\n    # hello spectators\n    pass\n");
+  await cara.waitForFunction(() => /hello spectators/.test(document.body.textContent), null, { timeout: 5000 });
+  check("spectator sees live code", true);
+  await alice.click("#run-button");
+  await cara.waitForFunction(() => /Ran:/.test(document.body.textContent), null, { timeout: 60000 });
+  check("spectator sees run activity", /Ran: (Runtime Error|Wrong Answer|Accepted)/.test(await cara.textContent(".spectate-grid")));
   await cara.screenshot({ path: path.join(shots, "07-spectate.png") });
 
   // Mobile layout sanity

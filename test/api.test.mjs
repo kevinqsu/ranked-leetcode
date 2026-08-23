@@ -106,6 +106,25 @@ try {
   await post("/api/duels", { action: "watch", sessionId: C, duelId: activeA.duel.id });
   const watching = await c.waitFor((v) => v.watch && v.watch.id === activeA.duel.id);
   check("spectator view", watching.watch.players.length === 2);
+  check("players see spectator names", (await a.waitFor((v) => v.duel?.spectators?.length === 1)).duel.spectators[0] === "Cara");
+  // live code relay: only to watchers, snapshot included in the watcher's view
+  const codeMsg = new Promise((resolve) => {
+    const prev = c.ws.onmessage;
+    c.ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === "code") resolve(m);
+      else prev(e);
+    };
+  });
+  a.ws.send(JSON.stringify({ type: "code", duelId: activeA.duel.id, code: "print('hi')", lastRun: { kind: "run", verdict: "Accepted", passed: 2, total: 2, at: Date.now() } }));
+  const relayed = await codeMsg;
+  check("code relayed to spectator", relayed.playerId === A && relayed.code === "print('hi')" && relayed.lastRun.verdict === "Accepted", relayed);
+  check("code not sent to the opponent", !b.views.some((v) => v.watch));
+  const snapshot = (await get(`/api/view?sessionId=${C}`)).body;
+  check("watcher view carries code snapshot", snapshot.watch.codes[A].code === "print('hi')", snapshot.watch.codes);
+  check("player views carry no code", (await get(`/api/view?sessionId=${B}`)).body.duel.codes === undefined);
+  await post("/api/duels", { action: "watch", sessionId: A, duelId: activeA.duel.id });
+  check("a player cannot spectate their own duel", (await get(`/api/view?sessionId=${A}`)).body.watch === null);
 
   // Veto flow: one veto does nothing, both re-roll
   const duelId = activeA.duel.id;

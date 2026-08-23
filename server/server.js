@@ -225,6 +225,10 @@ async function handleApi(req, res, url) {
         engine.touch(sessionId, name);
         engine.watch(sessionId, typeof body.duelId === "string" ? body.duelId : null);
         return send(res, 200, { ok: true });
+      case "code":
+        engine.touch(sessionId);
+        engine.setLiveCode({ sessionId, duelId: body.duelId, code: typeof body.code === "string" ? body.code : "", lastRun: body.lastRun });
+        return send(res, 200, { ok: true });
       case "hello":
         engine.touch(sessionId, name);
         return send(res, 200, { view: engine.view(sessionId) });
@@ -343,6 +347,9 @@ server.on("upgrade", (req, socket, head) => {
     if (!message || typeof message !== "object") return;
     if (message.type === "name") engine.touch(sessionId, cleanName(message.name));
     if (message.type === "watch") engine.watch(sessionId, typeof message.duelId === "string" ? message.duelId : null);
+    if (message.type === "code") {
+      engine.setLiveCode({ sessionId, duelId: message.duelId, code: typeof message.code === "string" ? message.code : "", lastRun: message.lastRun });
+    }
     if (message.type === "ping") conn.send(JSON.stringify({ type: "pong", now: Date.now() }));
   });
 });
