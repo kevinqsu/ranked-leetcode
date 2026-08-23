@@ -10,6 +10,12 @@
   "exampleTestcases": "[2,7,11,15]\n9\n[3,2,4]\n6\n[3,3]\n6",
   "sampleTestCase": "[2,7,11,15]\n9",
   "metaData": "{\"name\":\"twoSum\",\"params\":[{\"name\":\"nums\",\"type\":\"integer[]\"},{\"type\":\"integer\",\"name\":\"target\"}],\"return\":{\"type\":\"integer[]\",\"size\":2}}",
+  "hints": [
+   "A really brute force way would be to search for all possible pairs of numbers but that would be too slow. Again, it's best to try out brute force solutions for just for completeness. It is from these brute force solutions that you can come up with optimizations.",
+   "So, if we fix one of the numbers, say <code>x</code>, we have to scan the entire array to find the next number <code>y</code> which is <code>value - x</code> where value is the input parameter. Can we change our array somehow so that this search becomes faster?",
+   "The second train of thought is, without changing the array, can we use additional space somehow? Like maybe a hash map to speed up the search?"
+  ],
+  "stats": "{\"totalAccepted\":\"14.2M\",\"totalSubmission\":\"26.1M\",\"totalAcceptedRaw\":14200000,\"totalSubmissionRaw\":26100000,\"acRate\":\"54.4%\"}",
   "topicTags": [
    {
     "name": "Array",

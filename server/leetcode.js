@@ -143,6 +143,8 @@ const QUESTION_QUERY = `
       exampleTestcases
       sampleTestCase
       metaData
+      hints
+      stats
       topicTags { name slug }
       codeSnippets { lang langSlug code }
     }
@@ -201,6 +203,16 @@ export function buildProblem(question) {
   if (!examples.ok) reasons.push(examples.reason);
   if (ambiguous && examples.ok && support.ok) reasons.push("This problem accepts multiple answers, so outputs cannot be checked automatically.");
 
+  let stats = null;
+  try {
+    const raw = JSON.parse(question.stats || "null");
+    if (raw && typeof raw === "object") {
+      stats = { accepted: String(raw.totalAccepted || ""), submissions: String(raw.totalSubmission || ""), acRate: String(raw.acRate || "") };
+    }
+  } catch {
+    stats = null;
+  }
+
   return {
     id: String(question.questionFrontendId || question.questionId || ""),
     questionId: String(question.questionId || ""),
@@ -208,6 +220,8 @@ export function buildProblem(question) {
     titleSlug: question.titleSlug,
     difficulty: normalizeDifficulty(question.difficulty) || "Medium",
     content,
+    hints: (Array.isArray(question.hints) ? question.hints : []).slice(0, 6).map((h) => sanitizeHtml(h)),
+    stats,
     tags: (question.topicTags || []).map((t) => t.name).slice(0, 8),
     starterCode: snippet.code,
     metaData,

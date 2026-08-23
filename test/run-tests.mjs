@@ -19,6 +19,7 @@ const suites = [
   ["api.test.mjs", true],
   ["harness.test.mjs", hasPyodide],
   ["e2e.test.mjs", hasPyodide && hasPlaywright],
+  ["e2e-leetcode.test.mjs", hasPyodide && hasPlaywright],
 ];
 let failed = 0;
 for (const [file, enabled] of suites) {

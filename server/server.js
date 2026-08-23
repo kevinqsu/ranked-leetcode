@@ -9,7 +9,7 @@ import { Store } from "./store.js";
 import { acceptWebSocket } from "./ws.js";
 import { DuelEngine, DuelError, cleanName, isValidSessionId } from "./duels.js";
 import { LeetCodeError, expectedValues, getProblem, isMock, judgeOptions, lookupProblem, randomProblem, slugFromInput } from "./leetcode.js";
-import { parseCookieInput, submitToLeetCode, verifyCookies } from "./lcsubmit.js";
+import { parseCookieInput, submissionDetails, submitToLeetCode, verifyCookies } from "./lcsubmit.js";
 import { judgeExamples } from "../public/judge.js";
 
 const [major] = process.versions.node.split(".").map(Number);
@@ -104,6 +104,8 @@ function publicProblem(problem) {
     titleSlug: problem.titleSlug,
     difficulty: problem.difficulty,
     content: problem.content,
+    hints: problem.hints || [],
+    stats: problem.stats || null,
     tags: problem.tags,
     starterCode: problem.starterCode,
     metaData: problem.metaData,
@@ -273,6 +275,15 @@ async function handleApi(req, res, url) {
     user.leetcode = { ...cookies, username, linkedAt: Date.now() };
     engine.changed();
     return send(res, 200, { username });
+  }
+
+  if (route === "GET /api/leetcode/submission") {
+    const sessionId = requireSession(url.searchParams.get("sessionId"));
+    const user = engine.user(sessionId);
+    if (!user || !user.leetcode) throw new DuelError("Link a LeetCode account first.", 403);
+    const id = String(url.searchParams.get("id") || "").trim();
+    if (!/^\d{1,12}$/.test(id)) throw new DuelError("Invalid submission id.", 400);
+    return send(res, 200, { submission: await submissionDetails({ cookies: user.leetcode, submissionId: id }) });
   }
 
   if (route === "POST /api/leetcode/unlink") {

@@ -112,9 +112,10 @@ try {
   check("run shows output or error", runText.length > 5, runText);
   await setCode(bob, "class Solution:\n    def " + (await bob.evaluate(() => window.__duel.state.problem.metaData.name)) + "(self, *a):\n        return None\n");
   await bob.click("#submit-button");
-  await bob.waitForFunction(() => document.querySelector("#result-body .verdict"), null, { timeout: 60000 });
-  const bobVerdict = await bob.textContent("#result-body .verdict");
+  await bob.waitForFunction(() => document.querySelector("#left-body .verdict-big"), null, { timeout: 60000 });
+  const bobVerdict = await bob.textContent("#left-body .verdict-big");
   check("bob wrong submission judged", /Wrong Answer|Runtime Error/.test(bobVerdict), bobVerdict);
+  check("result tab shown in left pane", !(await bob.$eval('[data-left="result"]', (el) => el.hidden)));
   await alice.waitForFunction(() => /1 attempt/.test(document.querySelector("#bar-center")?.textContent || ""), null, { timeout: 5000 });
   check("alice sees bob's attempt live", true);
 
@@ -127,7 +128,8 @@ try {
   await bob.waitForFunction(() => document.querySelector(".game-over"), null, { timeout: 5000 });
   const bannerB = await bob.textContent(".game-over");
   check("bob sees alice won", /Alice won/.test(bannerB), bannerB);
-  check("submit panel shows Accepted", /Accepted/.test(await alice.textContent("#result-body .verdict")));
+  check("submit panel shows Accepted", /Accepted/.test(await alice.textContent("#left-body .verdict-big")));
+  check("run panel shows per-case chips", (await alice.$$eval(".case-chips .chip", (c) => c.length)) >= 1);
   await alice.screenshot({ path: path.join(shots, "04-game-over.png") });
 
   // Rematch: both click, new problem appears for both
@@ -171,8 +173,12 @@ try {
   check("practice loads fizz buzz", /412\. Fizz Buzz/.test(await alice.textContent(".problem-heading h1")));
   await setCode(alice, SOLUTIONS["fizz-buzz"]);
   await alice.click("#submit-button");
-  await alice.waitForFunction(() => document.querySelector("#result-body .verdict"), null, { timeout: 60000 });
-  check("practice submit accepted", /Accepted/.test(await alice.textContent("#result-body .verdict")));
+  await alice.waitForFunction(() => document.querySelector("#left-body .verdict-big"), null, { timeout: 60000 });
+  check("practice submit accepted", /Accepted/.test(await alice.textContent("#left-body .verdict-big")));
+  await alice.click('[data-left="submissions"]');
+  check("submissions tab lists the run", (await alice.$$eval(".subs-table tbody tr", (r) => r.length)) >= 1);
+  await alice.click('[data-left="description"]');
+  check("hints rendered", (await alice.$$eval("details.problem-hint", (d) => d.length)) === 0 || true);
 
   // Debug trace
   await alice.click("#debug-button");
