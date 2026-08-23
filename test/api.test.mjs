@@ -209,6 +209,43 @@ try {
   check("record survives unlinking", unlinked.body.view.records[0].wins === 1);
 
 
+  // ---- security + credential-free verification
+  const headRes = await fetch(BASE + "/");
+  const csp = headRes.headers.get("content-security-policy") || "";
+  check("CSP on html", /default-src 'self'/.test(csp) && /frame-ancestors 'none'/.test(csp) && /sha256-/.test(csp), csp.slice(0, 120));
+  check("other security headers", headRes.headers.get("x-content-type-options") === "nosniff" && headRes.headers.get("x-frame-options") === "DENY" && !!headRes.headers.get("strict-transport-security"));
+  const crossSite = await fetch(BASE + "/api/duels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+    body: JSON.stringify({ action: "hello", sessionId: A }),
+  });
+  check("cross-site POST blocked", crossSite.status === 403, crossSite.status);
+
+  const V = "dddddddd-4444-4444-8444-dddddddddddd";
+  const start = await post("/api/leetcode/verify", { action: "start", sessionId: V, username: "kevinqsu" });
+  check("verification issues a profile code", /^codeduel-[0-9a-f]{8}$/.test(start.body.pending.code), start.body);
+  const badName = await post("/api/leetcode/verify", { action: "start", sessionId: V, username: "not a username!" });
+  check("bad username rejected", badName.status === 400);
+  await post("/api/leetcode/verify", { action: "start", sessionId: V, username: "notme" });
+  const denied = await post("/api/leetcode/verify", { action: "check", sessionId: V });
+  check("verification fails when the code is absent", denied.status === 400 && /Could not find/.test(denied.body.error), denied.body);
+  await post("/api/leetcode/verify", { action: "start", sessionId: V, username: "kevinqsu" });
+  const verified = await post("/api/leetcode/verify", { action: "check", sessionId: V });
+  check("verification links the username", verified.body.username === "kevinqsu", verified.body);
+  const view = (await get(`/api/view?sessionId=${V}`)).body;
+  check("verified identity locks the name, without submit rights", view.me.name === "kevinqsu" && view.me.linked === true && view.me.canSubmit === false, view.me);
+  const noCreds = await post("/api/duels", { action: "create", sessionId: V, difficulty: "easy", judging: "leetcode" });
+  check("leetcode judging needs credentials, not just a name", noCreds.status === 400, noCreds.body);
+  const wrongAccount = await post("/api/leetcode/link", { sessionId: V, session: "user:someoneelse", csrf: "csrf1234" });
+  check("credentials for another account refused", wrongAccount.status === 409, wrongAccount.body);
+  const creds = await post("/api/leetcode/link", { sessionId: V, session: "user:kevinqsu", csrf: "csrf1234" });
+  check("own credentials accepted", creds.status === 200 && (await get(`/api/view?sessionId=${V}`)).body.me.canSubmit === true);
+  await sleep(400); // let the debounced save land
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "state.json"), "utf8"));
+  const saved = stored.users[V];
+  check("credentials encrypted at rest", saved.lcAuth.session.startsWith("v1.") && !JSON.stringify(saved).includes("user:kevinqsu"), Object.keys(saved));
+  check("view never exposes credentials", !JSON.stringify(view).includes("csrf"));
+
   a.ws.close(); b.ws.close(); c.ws.close();
 } catch (error) {
   failures += 1;

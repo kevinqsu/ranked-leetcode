@@ -6,6 +6,12 @@ const ex = (input, output, explanation) =>
   `<pre>\n<strong>Input:</strong> ${input}\n<strong>Output:</strong> ${output}\n` +
   (explanation ? `<strong>Explanation:</strong> ${explanation}\n` : "") + `</pre>\n`;
 const exTitle = (n) => `<p><strong class="example">Example ${n}:</strong></p>\n`;
+// LeetCode's newer markup: values live inside <span class="example-io">.
+const modernEx = (n, input, output, explanation) =>
+  `<p><strong class="example">Example ${n}:</strong></p>\n<div class="example-block">\n` +
+  `<p><strong>Input:</strong> <span class="example-io">${input}</span></p>\n` +
+  `<p><strong>Output:</strong> <span class="example-io">${output}</span></p>\n` +
+  (explanation ? `<p><strong>Explanation:</strong> ${explanation}</p>\n` : "") + `</div>\n`;
 const LISTNODE_DEF = `# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\n`;
 const TREENODE_DEF = `# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\n`;
 
@@ -46,7 +52,7 @@ const questions = [
   },
   {
     questionId: "20", questionFrontendId: "20", title: "Valid Parentheses", titleSlug: "valid-parentheses", difficulty: "Easy", isPaidOnly: false,
-    content: `<p>Given a string <code>s</code> containing just the characters <code>&#39;(&#39;</code>, <code>&#39;)&#39;</code>, <code>&#39;{&#39;</code>, <code>&#39;}&#39;</code>, <code>&#39;[&#39;</code> and <code>&#39;]&#39;</code>, determine if the input string is valid.</p>\n\n<p>&nbsp;</p>\n${exTitle(1)}${ex("s = &quot;()&quot;", "true")}${exTitle(2)}${ex("s = &quot;()[]{}&quot;", "true")}${exTitle(3)}${ex("s = &quot;(]&quot;", "false")}${exTitle(4)}${ex("s = &quot;([])&quot;", "true")}`,
+    content: `<p>Given a string <code>s</code> containing just the characters <code>&#39;(&#39;</code>, <code>&#39;)&#39;</code>, <code>&#39;{&#39;</code>, <code>&#39;}&#39;</code>, <code>&#39;[&#39;</code> and <code>&#39;]&#39;</code>, determine if the input string is valid.</p>\n\n<p>&nbsp;</p>\n${modernEx(1, "s = &quot;()&quot;", "true")}${modernEx(2, "s = &quot;()[]{}&quot;", "true")}${modernEx(3, "s = &quot;(]&quot;", "false")}${modernEx(4, "s = &quot;([])&quot;", "true")}`,
     exampleTestcases: '"()"\n"()[]{}"\n"(]"\n"([])"', sampleTestCase: '"()"',
     metaData: JSON.stringify({ name: "isValid", params: [{ name: "s", type: "string" }], return: { type: "boolean" } }),
     topicTags: [{ name: "String", slug: "string" }, { name: "Stack", slug: "stack" }],

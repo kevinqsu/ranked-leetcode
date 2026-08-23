@@ -9,7 +9,17 @@ import { Store } from "./store.js";
 import { acceptWebSocket } from "./ws.js";
 import { DuelEngine, DuelError, cleanName, isValidSessionId } from "./duels.js";
 import { LeetCodeError, expectedValues, getProblem, isMock, judgeOptions, lookupProblem, randomProblem, slugFromInput } from "./leetcode.js";
-import { parseCookieInput, submissionDetails, submitToLeetCode, verifyCookies } from "./lcsubmit.js";
+import {
+  cancelVerification,
+  checkVerification,
+  parseCookieInput,
+  pendingVerification,
+  startVerification,
+  submissionDetails,
+  submitToLeetCode,
+  verifyCookies,
+} from "./lcsubmit.js";
+import { RateLimiter, SecretBox, clientIp, inlineScriptHashes, sameOrigin, securityHeaders } from "./security.js";
 import { judgeExamples } from "../public/judge.js";
 
 const [major] = process.versions.node.split(".").map(Number);
@@ -45,8 +55,48 @@ const MIME = {
 };
 
 const store = new Store(DATA_DIR);
-store.load({ users: {}, duels: {} });
+store.load({ users: {}, duels: {}, records: {} });
 const engine = new DuelEngine(store);
+const box = new SecretBox(DATA_DIR);
+
+// Rate limits, per client IP. Generous for ordinary play, tight for the calls
+// that cost real work (LeetCode traffic) or that an attacker would want to grind.
+const limits = {
+  api: new RateLimiter({ limit: 1200, windowMs: 60 * 1000 }),
+  problems: new RateLimiter({ limit: 120, windowMs: 60 * 1000 }),
+  submit: new RateLimiter({ limit: 60, windowMs: 60 * 1000 }),
+  account: new RateLimiter({ limit: 40, windowMs: 5 * 60 * 1000 }),
+};
+const MAX_SOCKETS_PER_IP = 40;
+const socketsPerIp = new Map();
+
+// Credentials are encrypted with a key file next to the data, never echoed back.
+function storeCredentials(user, cookies) {
+  user.lcAuth = { session: box.encrypt(cookies.session), csrf: box.encrypt(cookies.csrf), addedAt: Date.now() };
+}
+
+function readCredentials(user) {
+  if (!user?.lcAuth?.session) return null;
+  const session = box.decrypt(user.lcAuth.session);
+  const csrf = box.decrypt(user.lcAuth.csrf);
+  return session && csrf ? { session, csrf } : null;
+}
+
+// Older releases kept the cookies in plain text under `leetcode`. Move them.
+(function migrateStoredCredentials() {
+  let moved = 0;
+  for (const user of Object.values(engine.state.users || {})) {
+    if (user?.leetcode?.session) {
+      storeCredentials(user, { session: user.leetcode.session, csrf: user.leetcode.csrf || "" });
+      user.leetcode = { username: user.leetcode.username || "", verifiedAt: user.leetcode.linkedAt || Date.now(), method: "credentials" };
+      moved += 1;
+    }
+  }
+  if (moved) {
+    console.log(`Encrypted ${moved} stored LeetCode credential(s).`);
+    store.flush();
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -56,7 +106,7 @@ function send(res, status, body, headers = {}) {
   res.writeHead(status, {
     "Content-Type": typeof body === "string" ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
     "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff",
+    ...securityHeaders(),
     ...headers,
   });
   res.end(payload);
@@ -152,8 +202,7 @@ function serveStatic(req, res, urlPath) {
       "Content-Type": type,
       "Cache-Control": ext === ".html" ? "no-cache" : "no-cache, max-age=0, must-revalidate",
       ETag: etag,
-      "X-Content-Type-Options": "nosniff",
-      "Referrer-Policy": "strict-origin-when-cross-origin",
+      ...securityHeaders({ html: ext === ".html", scriptHashes: ext === ".html" ? inlineScriptHashes(file) : [] }),
     };
     if (req.headers["if-none-match"] === etag) {
       res.writeHead(304, headers);
@@ -252,10 +301,10 @@ async function handleApi(req, res, url) {
     const wantsLeetCode = duel ? duel.judging === "leetcode" : body.mode === "leetcode";
     let verdict;
     if (wantsLeetCode) {
-      const user = engine.user(sessionId);
-      if (!user || !user.leetcode) throw new DuelError("Link a LeetCode account to submit to LeetCode.", 403);
+      const cookies = readCredentials(engine.user(sessionId));
+      if (!cookies) throw new DuelError("Connect LeetCode submissions to submit to LeetCode.", 403);
       if (!code.trim()) throw new DuelError("Write some code first.", 400);
-      verdict = await submitToLeetCode({ sessionId, cookies: user.leetcode, problem, code });
+      verdict = await submitToLeetCode({ sessionId, cookies, problem, code });
     } else {
       if (!problem.judgeable) throw new DuelError(`This problem cannot be auto-judged: ${problem.judgeNote}`, 409);
       const results = Array.isArray(body.results) ? body.results.slice(0, problem.examples.length) : [];
@@ -276,7 +325,14 @@ async function handleApi(req, res, url) {
     if (!cookies.session || !cookies.csrf) throw new DuelError("Both LEETCODE_SESSION and csrftoken are required.", 400);
     if (cookies.session.length > 4096 || cookies.csrf.length > 256) throw new DuelError("Cookie values look wrong.", 400);
     const { username } = await verifyCookies(cookies);
-    user.leetcode = { ...cookies, username, linkedAt: Date.now() };
+    // Never let credentials silently move a session onto a different identity:
+    // records belong to a verified username.
+    const current = user.leetcode?.username;
+    if (current && username && current.toLowerCase() !== username.toLowerCase()) {
+      throw new DuelError(`Those cookies belong to ${username}, but this session is linked to ${current}. Unlink first.`, 409);
+    }
+    storeCredentials(user, cookies);
+    user.leetcode = { username, verifiedAt: Date.now(), method: "credentials" };
     engine.touch(sessionId); // locks the display name to the LeetCode username
     engine.changed();
     return send(res, 200, { username });
@@ -284,20 +340,45 @@ async function handleApi(req, res, url) {
 
   if (route === "GET /api/leetcode/submission") {
     const sessionId = requireSession(url.searchParams.get("sessionId"));
-    const user = engine.user(sessionId);
-    if (!user || !user.leetcode) throw new DuelError("Link a LeetCode account first.", 403);
+    const cookies = readCredentials(engine.user(sessionId));
+    if (!cookies) throw new DuelError("Connect LeetCode submissions first.", 403);
     const id = String(url.searchParams.get("id") || "").trim();
     if (!/^\d{1,12}$/.test(id)) throw new DuelError("Invalid submission id.", 400);
-    return send(res, 200, { submission: await submissionDetails({ cookies: user.leetcode, submissionId: id }) });
+    return send(res, 200, { submission: await submissionDetails({ cookies, submissionId: id }) });
   }
 
   if (route === "POST /api/leetcode/unlink") {
     const body = await readJson(req);
     const sessionId = requireSession(body.sessionId);
     const user = engine.touch(sessionId);
-    delete user.leetcode;
+    cancelVerification(sessionId);
+    delete user.lcAuth;
+    if (body.credentialsOnly !== true) delete user.leetcode;
     engine.changed();
     return send(res, 200, { ok: true });
+  }
+
+  // Credential-free linking: put a one-time code on your LeetCode profile.
+  if (route === "POST /api/leetcode/verify") {
+    const body = await readJson(req);
+    const sessionId = requireSession(body.sessionId);
+    engine.touch(sessionId);
+    if (body.action === "cancel") {
+      cancelVerification(sessionId);
+      return send(res, 200, { ok: true });
+    }
+    if (body.action === "start") {
+      return send(res, 200, { pending: startVerification(sessionId, body.username) });
+    }
+    if (body.action === "status") {
+      return send(res, 200, { pending: pendingVerification(sessionId) });
+    }
+    const { username } = await checkVerification(sessionId);
+    const user = engine.user(sessionId);
+    user.leetcode = { username, verifiedAt: Date.now(), method: "profile" };
+    engine.touch(sessionId);
+    engine.changed();
+    return send(res, 200, { username });
   }
 
   if (route === "GET /api/health") {
@@ -310,9 +391,25 @@ async function handleApi(req, res, url) {
 // ---------------------------------------------------------------------------
 // server
 
+function limiterFor(pathname) {
+  if (pathname.startsWith("/api/leetcode")) return limits.account;
+  if (pathname === "/api/submit") return limits.submit;
+  if (pathname.startsWith("/api/problem")) return limits.problems;
+  return limits.api;
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname.startsWith("/api/")) {
+    // A browser on another site can read a visitor's session id from nothing, but
+    // it could still try to drive the API with guessed ids; refuse foreign origins.
+    if (req.method !== "GET" && req.method !== "HEAD" && !sameOrigin(req)) {
+      return send(res, 403, { error: "Cross-site request blocked." });
+    }
+    const gate = limiterFor(url.pathname).take(clientIp(req));
+    if (!gate.ok) {
+      return send(res, 429, { error: "Too many requests — slow down for a moment." }, { "Retry-After": String(gate.retryAfter) });
+    }
     handleApi(req, res, url).catch((error) => fail(res, error));
     return;
   }
@@ -333,8 +430,26 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
+  if (!sameOrigin(req)) {
+    socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  const ip = clientIp(req);
+  const open = socketsPerIp.get(ip) || 0;
+  if (open >= MAX_SOCKETS_PER_IP) {
+    socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
   const conn = acceptWebSocket(req, socket, head);
   if (!conn) return;
+  socketsPerIp.set(ip, open + 1);
+  conn.on("close", () => {
+    const left = (socketsPerIp.get(ip) || 1) - 1;
+    if (left > 0) socketsPerIp.set(ip, left);
+    else socketsPerIp.delete(ip);
+  });
   engine.touch(sessionId, url.searchParams.get("name") || undefined);
   engine.addConnection(sessionId, conn);
   conn.send(JSON.stringify({ type: "view", view: engine.view(sessionId) }));

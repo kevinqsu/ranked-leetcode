@@ -114,12 +114,12 @@ a { color: var(--orange); }
 .side {
   border-right: 1px solid var(--border);
   background: var(--panel);
-  padding: 18px 12px;
+  padding: 18px 12px 22px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 26px;
 }
-.side h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; text-align: center; letter-spacing: 0.02em; }
+.side h2 { margin: 0 0 10px; font-size: 11px; font-weight: 600; text-align: center; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .empty-list { color: var(--muted); text-align: center; font-size: 13px; padding: 10px 8px; }
 .list { display: grid; gap: 7px; }
 .list button {
@@ -146,12 +146,12 @@ a { color: var(--orange); }
 .record-row .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .record-row .wl { color: var(--muted); font-variant-numeric: tabular-nums; }
 .wl-inline { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 4px; font-variant-numeric: tabular-nums; }
-.text-input.locked { color: var(--muted); background: var(--surface); cursor: default; }
+.text-input.locked { background: var(--surface); cursor: default; }
+.text-input.locked:focus { outline: none; border-color: var(--border); }
 
-.setup { width: min(380px, 100% - 32px); margin: 10vh auto 40px; }
-.setup h1 { font-size: 22px; margin: 0 0 4px; }
-.setup .lead { color: var(--muted); margin: 0 0 22px; }
-.control-label, .control-group legend { display: block; color: var(--muted); font-size: 13px; margin: 0 0 7px; padding: 0; }
+.setup { width: min(380px, 100% - 32px); margin: 12vh auto 48px; }
+.setup h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 26px; }
+.control-label, .control-group legend { display: block; color: var(--muted); font-size: 12px; margin: 0 0 6px; padding: 0; }
 .text-input {
   width: 100%;
   height: 40px;
@@ -161,7 +161,7 @@ a { color: var(--orange); }
   border-radius: 5px;
   padding: 0 11px;
 }
-.control-group { border: 0; margin: 18px 0 0; padding: 0; }
+.control-group { border: 0; margin: 20px 0 0; padding: 0; }
 .segments { display: grid; gap: 1px; padding: 1px; border: 1px solid var(--border); background: var(--border); border-radius: 5px; overflow: hidden; }
 .segments.three { grid-template-columns: repeat(3, 1fr); }
 .segments.two { grid-template-columns: repeat(2, 1fr); }
@@ -172,14 +172,15 @@ a { color: var(--orange); }
 .segments button.easy.selected { color: #00a884; }
 .segments button.medium.selected { color: var(--orange); }
 .segments button.hard.selected { color: #e5484d; }
-.hint { margin: 8px 0 0; font-size: 12px; color: var(--muted); min-height: 1.2em; }
+.hint { margin: 7px 0 0; font-size: 12px; color: var(--muted); }
+.hint:empty { display: none; }
 .hint.ok { color: var(--green); }
 .hint.bad { color: var(--red); }
 .form-error { color: var(--red); font-size: 13px; margin: 13px 0 0; }
 .play-button {
   width: 100%;
-  height: 41px;
-  margin-top: 22px;
+  height: 42px;
+  margin-top: 26px;
   border: 0;
   border-radius: 5px;
   background: var(--orange);
@@ -583,3 +584,22 @@ body.resizing .cm-editor { pointer-events: none; }
 .chart-table tr.mine td { color: var(--orange); font-weight: 600; }
 .chart-table tbody { display: block; max-height: 180px; overflow: auto; }
 .chart-table thead, .chart-table tbody tr { display: table; width: 100%; table-layout: fixed; }
+
+/* ---------------------------------------------------------------- linking */
+.advanced { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
+.advanced > summary { cursor: pointer; font-size: 13px; color: var(--muted); list-style: none; }
+.advanced > summary::-webkit-details-marker { display: none; }
+.advanced > summary::before { content: "▸ "; }
+.advanced[open] > summary::before { content: "▾ "; }
+.advanced > summary:hover { color: var(--text); }
+.verify-code {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.verify-code code { flex: 1; font: 14px/1.4 "Cascadia Code", SFMono-Regular, Consolas, monospace; user-select: all; }

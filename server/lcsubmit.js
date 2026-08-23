@@ -1,7 +1,13 @@
-// Optional: judge on real LeetCode submissions using a player's own session
-// cookie (LEETCODE_SESSION + csrftoken). This mirrors what the VS Code LeetCode
-// extension does. It is best-effort: LeetCode can rate limit or block the server.
+// Two separate things live here:
+//
+//   1. Account verification — proves a player owns a LeetCode username by having
+//      them put a one-time code on their public profile. No credentials involved,
+//      so this is the default way to link an account.
+//   2. Submitting to LeetCode — needs the player's own session cookie, exactly as
+//      the VS Code LeetCode extension does, because LeetCode publishes no OAuth or
+//      public submit API. Opt-in, and only for players who want hidden-test judging.
 
+import crypto from "node:crypto";
 import { LeetCodeError, graphql, isMock, leetcodeFetch as limitedFetch } from "./leetcode.js";
 
 const USER_AGENT =
@@ -22,7 +28,11 @@ export function parseCookieInput(text) {
 }
 
 export async function verifyCookies(cookies) {
-  if (isMock()) return { username: cookies.session === "bad" ? "" : `mock_${cookies.csrf.slice(0, 8)}` };
+  if (isMock()) {
+    if (cookies.session === "bad") return { username: "" };
+    const named = /^user:([A-Za-z0-9_.-]+)$/.exec(cookies.session);
+    return { username: named ? named[1] : `mock_${cookies.csrf.slice(0, 8)}` };
+  }
   const data = await graphql(
     `query userStatus { userStatus { isSignedIn username } }`,
     {},
@@ -256,4 +266,87 @@ function mockDetails(submissionId) {
     totalTestcases: 57,
     lang: "Python3",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Account verification (no credentials)
+
+const VERIFY_TTL = 15 * 60 * 1000;
+const VERIFY_MAX_ATTEMPTS = 15;
+const pending = new Map(); // sessionId -> { username, code, expiresAt, attempts }
+
+export function cleanUsername(value) {
+  const text = String(value || "").trim().replace(/^@/, "");
+  const url = text.match(/leetcode\.com\/(?:u\/)?([A-Za-z0-9_.-]+)/i);
+  const name = url ? url[1] : text;
+  return /^[A-Za-z0-9_.-]{1,40}$/.test(name) ? name : "";
+}
+
+const PROFILE_QUERY = `
+  query userPublicProfile($username: String!) {
+    matchedUser(username: $username) {
+      username
+      profile { realName aboutMe websites }
+    }
+  }
+`;
+
+export async function publicProfile(username) {
+  const data = await graphql(PROFILE_QUERY, { username }, { referer: `https://leetcode.com/u/${username}/` });
+  const user = data.matchedUser;
+  if (!user) throw new LeetCodeError(`LeetCode has no user called "${username}".`, 404);
+  const profile = user.profile || {};
+  return {
+    username: user.username || username,
+    fields: [profile.realName, profile.aboutMe, ...(Array.isArray(profile.websites) ? profile.websites : [])]
+      .filter((v) => typeof v === "string" && v)
+      .join("\n"),
+  };
+}
+
+export function startVerification(sessionId, usernameInput) {
+  const username = cleanUsername(usernameInput);
+  if (!username) throw new LeetCodeError("That does not look like a LeetCode username.", 400);
+  const code = `codeduel-${crypto.randomBytes(4).toString("hex")}`;
+  const expiresAt = Date.now() + VERIFY_TTL;
+  pending.set(sessionId, { username, code, expiresAt, attempts: 0 });
+  if (pending.size > 500) {
+    for (const [key, entry] of pending) if (entry.expiresAt < Date.now()) pending.delete(key);
+  }
+  return { username, code, expiresAt };
+}
+
+export function pendingVerification(sessionId) {
+  const entry = pending.get(sessionId);
+  if (!entry || entry.expiresAt < Date.now()) return null;
+  return { username: entry.username, code: entry.code, expiresAt: entry.expiresAt };
+}
+
+export function cancelVerification(sessionId) {
+  pending.delete(sessionId);
+}
+
+// Confirms the one-time code is on the profile, then forgets it.
+export async function checkVerification(sessionId) {
+  const entry = pending.get(sessionId);
+  if (!entry || entry.expiresAt < Date.now()) {
+    pending.delete(sessionId);
+    throw new LeetCodeError("That verification expired. Start again to get a new code.", 400);
+  }
+  entry.attempts += 1;
+  if (entry.attempts > VERIFY_MAX_ATTEMPTS) {
+    pending.delete(sessionId);
+    throw new LeetCodeError("Too many attempts. Start again to get a new code.", 429);
+  }
+  const profile = isMock()
+    ? { username: entry.username, fields: entry.username === "notme" ? "nothing here" : entry.code }
+    : await publicProfile(entry.username);
+  if (!profile.fields.includes(entry.code)) {
+    throw new LeetCodeError(
+      `Could not find ${entry.code} on leetcode.com/u/${entry.username}. Add it to your profile's Name, Summary or a website link, save, then try again.`,
+      400,
+    );
+  }
+  pending.delete(sessionId);
+  return { username: profile.username };
 }

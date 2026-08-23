@@ -60,19 +60,37 @@ try {
   // ---- link a (mock) LeetCode account: name autofills
   const alice = await newPlayer("");
   await alice.waitForFunction(() => document.querySelector("#online-pill")?.textContent?.includes("online"));
+  // credential-free verification: username -> profile code -> verified
   await alice.click("#lc-button");
-  await alice.fill("#lc-session", "mocksession");
-  await alice.fill("#lc-csrf", "csrf12345");
-  await alice.click("#link-button");
-  await alice.waitForFunction(() => document.querySelector("#lc-button")?.textContent?.includes("mock_csrf1234"), null, { timeout: 5000 });
-  check("account linked", true);
-  check("name autofilled from LeetCode username", (await alice.inputValue("#name")) === "mock_csrf1234", await alice.inputValue("#name"));
-  check("name input is locked while linked", await alice.$eval("#name", (el) => el.readOnly) && /unlink to change/.test(await alice.textContent("#name-hint")));
+  await alice.fill("#lc-username", "kevinqsu");
+  await alice.click("#get-code");
+  await alice.waitForSelector("#verify-code", { timeout: 5000 });
+  check("verification code issued", /^codeduel-[0-9a-f]{8}$/.test((await alice.textContent("#verify-code")).trim()));
+  check("no credentials asked for up front", (await alice.$("#lc-session")) === null || !(await alice.isVisible("#lc-session")));
+  await alice.click("#verify-now");
+  await alice.waitForFunction(() => document.querySelector("#lc-button")?.textContent?.includes("kevinqsu"), null, { timeout: 5000 });
+  check("account verified without credentials", true);
+  check("name locked to the verified username", (await alice.inputValue("#name")) === "kevinqsu" && (await alice.$eval("#name", (el) => el.readOnly)));
+  check("lock subtext removed", (await alice.$("#name-hint")) === null);
+  check("subtitle removed from the menu", (await alice.$(".setup .lead")) === null);
+  check("problem placeholder is just Random", (await alice.$eval("#problem-query", (el) => el.placeholder)) === "Random");
+  check("mode reads 1v1", /1v1/.test(await alice.textContent('[data-mode="duel"]')));
+  check("sidebar footer removed", (await alice.$(".side-foot")) === null);
   check("leetcode logo in the header", (await alice.$("#home-button svg.lc-logo")) !== null);
   check("favicon is the leetcode mark", /image\/svg\+xml/.test(await alice.$eval('link[rel="icon"]', (l) => l.href)));
-  await alice.waitForFunction(() => !document.querySelector('[data-judging="leetcode"]')?.disabled);
-  await alice.click('[data-judging="leetcode"]');
-  check("leetcode judging selectable after linking", await alice.$eval('[data-judging="leetcode"]', (b) => b.classList.contains("selected")));
+  check("verified alone cannot pick leetcode judging", await alice.$eval('[data-judging="leetcode"]', (b) => b.disabled));
+
+  // opting into real submissions is behind the advanced disclosure
+  await alice.click("#lc-button");
+  await alice.click(".advanced > summary");
+  await alice.fill("#lc-session", "user:kevinqsu");
+  await alice.fill("#lc-csrf", "csrf12345");
+  await alice.click("#link-button");
+  await alice.waitForFunction(() => !document.querySelector('[data-judging="leetcode"]')?.disabled, null, { timeout: 5000 });
+  check("submissions connected", true);
+  check("judging defaults to LeetCode account once connected", await alice.$eval('[data-judging="leetcode"]', (b) => b.classList.contains("selected")));
+  check("judging hint trimmed", (await alice.textContent("#judging-hint")).trim() === "Opponents must link an account too.");
+  check("verified identity kept after connecting submissions", (await alice.inputValue("#name")) === "kevinqsu");
 
   // ---- practice with LeetCode judging: submit, see Beats + chart
   await alice.fill("#problem-query", "1");
@@ -179,9 +197,10 @@ try {
   await bob.click("#show-result");
   check("banner can be reopened", !!(await bob.$(".game-over")));
   check("winner's banner shows the record", /Your record: 1–0/.test(await alice.textContent(".game-over")), await alice.textContent(".game-over"));
+  check("editor blocks spellcheck and Grammarly", await alice.$eval(".cm-content", (el) => el.getAttribute("spellcheck") === "false" && el.getAttribute("data-gramm") === "false"));
   await alice.click("#menu-button");
   await alice.waitForSelector(".setup", { timeout: 5000 });
-  await alice.waitForFunction(() => /mock_csrf1234/.test(document.querySelector("#record-list")?.textContent || ""), null, { timeout: 5000 });
+  await alice.waitForFunction(() => /kevinqsu/.test(document.querySelector("#record-list")?.textContent || ""), null, { timeout: 5000 });
   check("records sidebar lists the linked winner", /1–0/.test(await alice.textContent("#record-list")));
   await alice.screenshot({ path: path.join(shots, "14-records-home.png") });
 

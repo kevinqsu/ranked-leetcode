@@ -70,9 +70,15 @@ export class DuelEngine {
     return this.state.users[sessionId] || null;
   }
 
+  // A verified LeetCode identity: earned by proving ownership of the username
+  // (profile code) or by linking credentials. Drives the name lock and records.
   isLinked(sessionId) {
-    const user = this.user(sessionId);
-    return !!(user && user.leetcode && user.leetcode.session);
+    return !!this.user(sessionId)?.leetcode?.username;
+  }
+
+  // Credentials on file, so this player can have code submitted to LeetCode.
+  canSubmitLeetCode(sessionId) {
+    return !!this.user(sessionId)?.lcAuth?.session;
   }
 
   // ------------------------------------------------------------ records (per LeetCode username)
@@ -285,6 +291,7 @@ export class DuelEngine {
         id: sessionId,
         name: user ? user.name : "Guest",
         linked: this.isLinked(sessionId),
+        canSubmit: this.canSubmitLeetCode(sessionId),
         leetcodeUser: user?.leetcode?.username || null,
         record: this.recordFor(sessionId),
       },
@@ -328,7 +335,9 @@ export class DuelEngine {
     const level = normalizeDifficulty(difficulty);
     if (!level) throw new DuelError("Pick a difficulty.");
     const mode = judging === "leetcode" ? "leetcode" : "examples";
-    if (mode === "leetcode" && !this.isLinked(sessionId)) throw new DuelError("Link a LeetCode account to use LeetCode judging.");
+    if (mode === "leetcode" && !this.canSubmitLeetCode(sessionId)) {
+      throw new DuelError("Connect LeetCode submissions to use LeetCode judging.");
+    }
 
     let requested = null;
     if (problemQuery) {
@@ -398,8 +407,8 @@ export class DuelEngine {
     const duel = this.get(duelId);
     if (duel.status !== "open") throw new DuelError("That challenge is no longer available.", 409);
     if (duel.creatorId === sessionId) throw new DuelError("You cannot accept your own challenge.", 409);
-    if (duel.judging === "leetcode" && !this.isLinked(sessionId)) {
-      throw new DuelError("That duel is judged on LeetCode submissions; link your LeetCode account first.", 403);
+    if (duel.judging === "leetcode" && !this.canSubmitLeetCode(sessionId)) {
+      throw new DuelError("That match is judged on LeetCode submissions; connect LeetCode submissions first.", 403);
     }
     for (const other of this.duelsOf(sessionId)) {
       if (other.status === "open") this.finish(other, "cancelled", "left");
@@ -646,7 +655,7 @@ export class DuelEngine {
       }
     }
     for (const [id, user] of Object.entries(this.state.users)) {
-      if (!user.leetcode && now - (user.lastSeen || user.createdAt || 0) > USER_RETENTION) {
+      if (!user.leetcode?.username && now - (user.lastSeen || user.createdAt || 0) > USER_RETENTION) {
         delete this.state.users[id];
         dirty = true;
       }

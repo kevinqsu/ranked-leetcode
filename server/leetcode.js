@@ -268,6 +268,55 @@ export function htmlToText(html) {
   return decodeEntities(String(html || "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
 }
 
+// LeetCode writes statements in several markups: classic <pre> blocks, the newer
+// <div class="example-block"> with <span class="example-io"> values, and a few with
+// the value on the line after its label. Collapsing the HTML to plain text (keeping
+// block boundaries as newlines) makes every variant look the same, so the parser
+// does not have to know which one a problem uses.
+export function htmlToLines(html) {
+  const text = String(html || "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*\/?\s*(p|div|pre|li|ul|ol|tr|table|h[1-6]|blockquote)(\s[^>]*)?>/gi, "\n")
+    .replace(/<[^>]*>/g, "");
+  return decodeEntities(text)
+    .split("\n")
+    .map((line) => line.replace(/\u00a0/g, " ").trim());
+}
+
+const OUTPUT_LABEL = /^Outputs?\s*:?\s*(.*)$/i;
+
+function outputsFromLines(lines) {
+  const outputs = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = OUTPUT_LABEL.exec(lines[i]);
+    if (!match) continue;
+    let value = match[1].trim();
+    // Design problems label the line and put the value underneath it.
+    for (let j = i + 1; !value && j < lines.length && j <= i + 3; j += 1) value = lines[j].trim();
+    if (value) outputs.push(value);
+  }
+  return outputs;
+}
+
+// Stricter pass: only labels LeetCode marked up as headings. Used when the loose
+// pass finds more "Output" lines than the problem has examples (prose can contain
+// the word at the start of a line).
+function taggedOutputs(contentHtml) {
+  const blocks = [];
+  const pattern = /<(strong|b)(?:\s[^>]*)?>\s*Outputs?\s*:?\s*<\/\1\s*>([\s\S]{0,400}?)(?=<(?:strong|b)[^>]*>|$)/gi;
+  let match;
+  while ((match = pattern.exec(contentHtml)) !== null) blocks.push(`Output: ${match[2]}`);
+  return outputsFromLines(htmlToLines(blocks.join("\n<br>\n")));
+}
+
+export function extractOutputs(contentHtml, expected = 0) {
+  const loose = outputsFromLines(htmlToLines(contentHtml));
+  if (!expected || loose.length === expected) return loose;
+  const tagged = taggedOutputs(contentHtml);
+  return tagged.length === expected ? tagged : loose;
+}
+
 export function parseExamples(contentHtml, exampleTestcases, metaData) {
   const isDesign = !!(metaData && (metaData.classname || metaData.systemdesign));
   const paramCount = isDesign ? 2 : Array.isArray(metaData?.params) ? metaData.params.length : 0;
@@ -283,14 +332,13 @@ export function parseExamples(contentHtml, exampleTestcases, metaData) {
   const inputs = [];
   for (let i = 0; i < lines.length; i += paramCount) inputs.push(lines.slice(i, i + paramCount).join("\n"));
 
-  const outputs = [];
-  const pattern = /<(?:strong|b)(?:\s[^>]*)?>\s*Output\s*:?\s*<\/(?:strong|b)>\s*:?\s*([^\n<]*)/gi;
-  let match;
-  while ((match = pattern.exec(contentHtml)) !== null) {
-    outputs.push(decodeEntities(match[1]).trim());
-  }
+  const outputs = extractOutputs(contentHtml, inputs.length);
   if (outputs.length !== inputs.length) {
-    return { ok: false, items: [], reason: "Example outputs could not be matched to example inputs." };
+    return {
+      ok: false,
+      items: [],
+      reason: `The statement lists ${outputs.length} example output(s) for ${inputs.length} example input(s).`,
+    };
   }
   const items = inputs.map((input, i) => ({ input, expectedText: outputs[i] }));
   const unparsable = items.find((item) => !parseLiteral(item.expectedText).ok);

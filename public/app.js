@@ -42,10 +42,11 @@ function loadSettings() {
       difficulty: DIFFICULTIES.includes(saved.difficulty) ? saved.difficulty : "medium",
       mode: saved.mode === "practice" ? "practice" : "duel",
       judging: saved.judging === "leetcode" ? "leetcode" : "examples",
+      judgingChosen: saved.judgingChosen === true,
       problem: typeof saved.problem === "string" ? saved.problem : "",
     };
   } catch {
-    return { difficulty: "medium", mode: "duel", judging: "examples", problem: "" };
+    return { difficulty: "medium", mode: "duel", judging: "examples", judgingChosen: false, problem: "" };
   }
 }
 
@@ -277,6 +278,22 @@ const py = {
 // ---------------------------------------------------------------------------
 // editor (CodeMirror with a textarea fallback)
 
+const NO_SPELLCHECK = {
+  spellcheck: "false",
+  autocorrect: "off",
+  autocapitalize: "off",
+  autocomplete: "off",
+  translate: "no",
+  // Grammarly and friends look for these before attaching to a field.
+  "data-gramm": "false",
+  "data-gramm_editor": "false",
+  "data-enable-grammarly": "false",
+};
+
+function stopSpellcheck(element) {
+  for (const [key, value] of Object.entries(NO_SPELLCHECK)) element.setAttribute(key, value);
+}
+
 const editor = {
   view: null,
   textarea: null,
@@ -298,6 +315,7 @@ const editor = {
             CM.basicSetup,
             CM.python(),
             CM.indentUnit.of("    "),
+            CM.EditorView.contentAttributes.of(NO_SPELLCHECK),
             this.themeCompartment.of(currentTheme() === "dark" ? CM.oneDark : []),
             CM.EditorView.updateListener.of((update) => {
               if (update.docChanged) {
@@ -313,8 +331,8 @@ const editor = {
     }
     const textarea = document.createElement("textarea");
     textarea.className = "editor-fallback";
-    textarea.spellcheck = false;
     textarea.value = doc;
+    stopSpellcheck(textarea);
     textarea.addEventListener("input", () => {
       scheduleCodeSave();
       scheduleCodeShare();
@@ -406,7 +424,7 @@ function applyView(view) {
   }
 
   if (state.mode === "spectate") {
-    if (!view.watch) return goHome("That duel is over.");
+    if (!view.watch) return goHome("That match is over.");
     renderSpectate();
     return;
   }
@@ -466,7 +484,6 @@ function renderHome() {
           <div><h2>Challenges</h2><div class="list" id="challenge-list"></div></div>
           <div><h2>Spectate</h2><div class="list" id="game-list"></div></div>
           <div><h2>Records</h2><div class="records" id="record-list"></div></div>
-          <div class="side-foot">First to pass the examples wins.<br />Python 3 runs in your browser.</div>
         </aside>
         <section class="main" id="home-main"></section>
       </div>`;
@@ -499,13 +516,13 @@ function updateSidebar() {
     ? active
         .map(
           (g) => `
-          <button type="button" data-watch="${escapeHtml(g.id)}" title="Watch this duel">
+          <button type="button" data-watch="${escapeHtml(g.id)}" title="Watch this match">
             <div class="row"><strong>${escapeHtml(g.creatorName)} vs ${escapeHtml(g.opponentName)}</strong><span>${escapeHtml(g.difficulty)}</span></div>
             <div class="sub">#${escapeHtml(g.problem.id)} ${escapeHtml(g.problem.title)}</div>
           </button>`,
         )
         .join("")
-    : `<div class="empty-list">No duels in progress</div>`;
+    : `<div class="empty-list">No matches in progress</div>`;
   challenges.querySelectorAll("[data-accept]").forEach((button) => button.addEventListener("click", () => acceptChallenge(button.dataset.accept)));
   games.querySelectorAll("[data-watch]").forEach((button) => button.addEventListener("click", () => watchDuel(button.dataset.watch)));
   const records = $("record-list");
@@ -518,7 +535,7 @@ function updateSidebar() {
             (r, i) => `<div class="record-row ${r.username.toLowerCase() === mine ? "me" : ""}"><span class="rank">${i + 1}</span><span class="who">${escapeHtml(r.username)}</span><span class="wl">${r.wins}–${r.losses}</span></div>`,
           )
           .join("")
-      : `<div class="empty-list">Link a LeetCode account and duel to start a record.</div>`;
+      : `<div class="empty-list">${view?.me?.linked ? "No matches played yet." : "Link an account to start a record."}</div>`;
   }
 }
 
@@ -549,10 +566,8 @@ function updateHomeMain() {
   main.innerHTML = `
     <form class="setup" id="setup-form" autocomplete="off">
       <h1>LeetCode 1v1</h1>
-      <p class="lead">Same problem, same clock. First accepted solution wins.</p>
       <label class="control-label" for="name">Name</label>
       <input id="name" class="text-input" maxlength="30" placeholder="Guest" value="${escapeHtml(state.name)}" />
-      <p class="hint" id="name-hint"></p>
       <fieldset class="control-group">
         <legend>Difficulty</legend>
         <div class="segments three" id="difficulty-segments">
@@ -561,14 +576,14 @@ function updateHomeMain() {
       </fieldset>
       <fieldset class="control-group">
         <legend>Problem</legend>
-        <input id="problem-query" class="text-input" placeholder="Random — or a problem number, slug or URL" value="${escapeHtml(s.problem)}" />
+        <input id="problem-query" class="text-input" placeholder="Random" value="${escapeHtml(s.problem)}" />
         <p class="hint" id="problem-hint"></p>
       </fieldset>
       <fieldset class="control-group">
         <legend>Mode</legend>
         <div class="segments two" id="mode-segments">
           <button type="button" data-mode="practice" class="${s.mode === "practice" ? "selected" : ""}">Practice</button>
-          <button type="button" data-mode="duel" class="${s.mode === "duel" ? "selected" : ""}">Duel</button>
+          <button type="button" data-mode="duel" class="${s.mode === "duel" ? "selected" : ""}">1v1</button>
         </div>
       </fieldset>
       <fieldset class="control-group" id="judging-group">
@@ -607,6 +622,7 @@ function updateHomeMain() {
     const button = event.target.closest("[data-judging]");
     if (!button || button.disabled) return;
     state.settings.judging = button.dataset.judging;
+    state.settings.judgingChosen = true;
     saveSettings();
     syncSetupForm();
   });
@@ -636,31 +652,30 @@ function syncSetupForm() {
   if (!form) return;
   form.querySelectorAll("[data-difficulty]").forEach((b) => b.classList.toggle("selected", b.dataset.difficulty === s.difficulty));
   form.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("selected", b.dataset.mode === s.mode));
-  const linked = !!state.view?.me?.linked;
   const nameInput = $("name");
   const locked = !!lockedName();
   nameInput.readOnly = locked;
   nameInput.classList.toggle("locked", locked);
+  nameInput.title = locked ? "Linked to your LeetCode account" : "";
   if (locked && nameInput.value !== lockedName()) nameInput.value = lockedName();
-  const record = state.view?.me?.record;
-  $("name-hint").textContent = locked
-    ? `🔒 Your LeetCode username${record ? ` · record ${formatRecord(record)}` : ""} (unlink to change)`
-    : "";
+  const canSubmit = !!state.view?.me?.canSubmit;
   const leetButton = form.querySelector('[data-judging="leetcode"]');
-  leetButton.disabled = !linked;
-  if (!linked && s.judging === "leetcode") s.judging = "examples";
+  leetButton.disabled = !canSubmit;
+  if (!canSubmit && s.judging === "leetcode") s.judging = "examples";
+  // Once submissions are connected, LeetCode judging is the default — picking the
+  // wrong one only shows up mid-match.
+  if (canSubmit && !s.judgingChosen && s.judging !== "leetcode") {
+    s.judging = "leetcode";
+    saveSettings();
+  }
   form.querySelectorAll("[data-judging]").forEach((b) => b.classList.toggle("selected", b.dataset.judging === s.judging));
-  $("judging-hint").textContent = linked
-    ? s.judging === "leetcode"
-      ? `Submissions go to LeetCode as ${state.view.me.leetcodeUser || "your account"} — hidden tests count. Opponents must link an account too.`
-      : "The problem's example tests run in your browser; first to pass them all wins."
-    : "Link a LeetCode account (top right) to judge on real submissions instead of the examples.";
+  $("judging-hint").textContent = canSubmit && s.judging === "leetcode" ? "Opponents must link an account too." : "";
   const hint = $("problem-hint");
   const lookup = state.lookup;
   hint.textContent = lookup.text;
   hint.className = `hint ${lookup.ok === true ? "ok" : lookup.ok === false ? "bad" : ""}`;
   $("play-button").disabled = state.busy;
-  $("play-button").textContent = state.busy ? "Loading…" : s.mode === "duel" ? "Find a duel" : "Practice";
+  $("play-button").textContent = state.busy ? "Loading…" : s.mode === "duel" ? "Find a match" : "Practice";
   form.querySelectorAll("[data-difficulty]").forEach((b) => (b.disabled = !!(lookup.ok && lookup.summary)));
 }
 
@@ -806,8 +821,8 @@ function homeButton() {
   if (state.mode === "duel" && duel && duel.status === "active") {
     const opponent = duel.players.find((p) => p.id !== me());
     openModal(`
-      <h2>Leave the duel?</h2>
-      <p>Leaving now forfeits the duel${opponent ? ` to ${escapeHtml(opponent.name)}` : ""}.</p>
+      <h2>Leave the match?</h2>
+      <p>Leaving now forfeits the match${opponent ? ` to ${escapeHtml(opponent.name)}` : ""}.</p>
       <div class="actions">
         <button type="button" class="small-button" data-close>Stay</button>
         <button type="button" class="small-button danger" id="confirm-forfeit">Forfeit and leave</button>
@@ -1158,7 +1173,7 @@ function renderSubmissionPanel(sub) {
         <div class="metric-card static">
           <div class="metric-label">${ICONS.check} Judge</div>
           <div class="metric-value">Examples</div>
-          <div class="metric-beats muted">${state.view?.me?.linked ? "this duel was judged on examples" : "link a LeetCode account for hidden tests"}</div>
+          <div class="metric-beats muted">${state.view?.me?.linked ? "this match was judged on examples" : "connect submissions for hidden tests"}</div>
         </div>
       </div>`;
   } else {
@@ -1399,6 +1414,7 @@ function renderTestcaseTab(body) {
     renderTestcaseTab(body);
     body.querySelector(".param-input")?.focus();
   });
+  body.querySelectorAll(".param-input").forEach((input) => stopSpellcheck(input));
   body.querySelectorAll(".param-input").forEach((input) =>
     input.addEventListener("input", () => {
       const i = Number(input.dataset.param);
@@ -1587,7 +1603,7 @@ async function submitCode() {
       submissionId: v.submissionId || null,
       statsPending: !!(v.accepted && v.source === "leetcode"),
       detail: {},
-      note: duel && response.duel && response.duel.status === "complete" && response.duel.winnerId !== me() ? "the duel was already over" : "",
+      note: duel && response.duel && response.duel.status === "complete" && response.duel.winnerId !== me() ? "the match was already over" : "",
     };
     if (v.source === "leetcode") record.detail = v.detail || {};
     else if (!v.accepted) {
@@ -1740,7 +1756,7 @@ function updateBar() {
   const vetoCount = canVeto ? duel.players.filter((p) => p.vetoed).length : 0;
   const useLeetCode = duel ? duel.judging === "leetcode" : state.settings.judging === "leetcode" && state.view?.me?.linked;
   const finished = state.mode === "duel" && duel && duel.status === "complete" && state.bannerDismissed === duel.id;
-  const winnerText = finished ? (duel.winnerId === me() ? "You won" : duel.endReason === "expired" ? "Duel expired" : `${duel.winnerName || "Opponent"} won`) : "";
+  const winnerText = finished ? (duel.winnerId === me() ? "You won" : duel.endReason === "expired" ? "Match expired" : `${duel.winnerName || "Opponent"} won`) : "";
   actions.innerHTML = `
     ${finished ? `<button type="button" class="bar-button result-pill" id="show-result" title="Show the duel result">${escapeHtml(winnerText)} · Rematch?</button>` : ""}
     ${canVeto ? `<button type="button" class="bar-button" id="veto-button" ${meVetoed || running ? "disabled" : ""} title="If both players veto, a new problem is picked">Veto ${vetoCount}/2</button>` : ""}
@@ -1783,7 +1799,7 @@ function updateGameOver() {
   if (duel.endReason === "forfeit") {
     headline = mine ? `${escapeHtml(opponent?.name || "Your opponent")} forfeited — you win` : "You forfeited";
   } else if (duel.endReason === "expired") {
-    headline = "Duel expired — no winner";
+    headline = "Match expired — no winner";
   } else {
     headline = mine ? "You won!" : `${escapeHtml(duel.winnerName || "Opponent")} won`;
     sub = `Solved in ${formatDuration(duelElapsed(duel))}`;
@@ -1913,6 +1929,7 @@ function createReadOnlyEditor(container, doc) {
           CM.python(),
           CM.EditorState.readOnly.of(true),
           CM.EditorView.editable.of(false),
+          CM.EditorView.contentAttributes.of(NO_SPELLCHECK),
           currentTheme() === "dark" ? CM.oneDark : [],
         ],
       }),
@@ -1932,6 +1949,7 @@ function createReadOnlyEditor(container, doc) {
   textarea.className = "editor-fallback";
   textarea.readOnly = true;
   textarea.value = doc;
+  stopSpellcheck(textarea);
   container.appendChild(textarea);
   return {
     setCode(code) {
@@ -1991,7 +2009,7 @@ function updateSpectate(duel) {
   let text;
   if (duel.status === "complete") {
     const how = duel.endReason === "solved" ? `solved in ${formatDuration(duelElapsed(duel))}` : duel.endReason === "forfeit" ? "by forfeit" : "";
-    text = duel.endReason === "expired" ? "Duel expired — no winner." : `<strong>${escapeHtml(duel.winnerName || "")}</strong> won${how ? ` · ${how}` : ""}.`;
+    text = duel.endReason === "expired" ? "Match expired — no winner." : `<strong>${escapeHtml(duel.winnerName || "")}</strong> won${how ? ` · ${how}` : ""}.`;
     if (duel.rematchDuelId) text += ` <button type="button" class="link-button" id="watch-rematch">Watch the rematch →</button>`;
   } else {
     text = `${duel.judging === "leetcode" ? "Judged on LeetCode submissions" : "First to pass all examples wins"} · ${escapeHtml(duel.difficulty)} · ${duel.players.filter((p) => p.vetoed).length}/2 vetoes`;
@@ -2079,45 +2097,189 @@ function closeModal() {
   $("modal-root").innerHTML = "";
 }
 
+const linking = { username: "", pending: null, busy: false, error: "", advanced: false };
+
 function openLinkModal() {
-  const linked = !!state.view?.me?.linked;
-  if (linked) {
-    openModal(`
-      <h2>LeetCode account</h2>
-      <p>Linked as <strong>${escapeHtml(state.view.me.leetcodeUser || "your account")}</strong>. Submissions made with "LeetCode account" judging are sent to LeetCode under this account and count toward your real submission history.</p>
-      <div class="actions">
-        <button type="button" class="small-button" data-close>Close</button>
-        <button type="button" class="small-button danger" id="unlink-button">Unlink</button>
-      </div>`);
-    $("unlink-button").addEventListener("click", async () => {
-      try {
-        await api("/api/leetcode/unlink", { method: "POST", body: JSON.stringify({ sessionId: state.session }) });
-        closeModal();
-        pollOnce();
-      } catch (error) {
-        toast(error.message);
+  linking.error = "";
+  linking.busy = false;
+  linking.advanced = false;
+  linking.username = state.view?.me?.leetcodeUser || linking.username;
+  renderLinkModal();
+  api(`/api/leetcode/verify`, { method: "POST", body: JSON.stringify({ action: "status", sessionId: state.session }) })
+    .then(({ pending }) => {
+      if (pending && !state.view?.me?.linked) {
+        linking.pending = pending;
+        renderLinkModal();
       }
-    });
-    return;
-  }
+    })
+    .catch(() => {});
+}
+
+function renderLinkModal() {
+  const me = state.view?.me;
+  if (me?.linked) return renderLinkedModal(me);
+  if (linking.pending) return renderCodeModal();
+  return renderUsernameModal();
+}
+
+function renderUsernameModal() {
   openModal(`
     <h2>Link your LeetCode account</h2>
-    <p>Optional. With an account linked, a duel can be judged on real LeetCode submissions (hidden tests, time limits) instead of the example tests.</p>
-    <p class="warn">Your session cookie is stored on this server and lets it submit code as you. Only do this on a site you trust, and unlink when you're done. Logging out of LeetCode invalidates it.</p>
+    <p>Verifying your username locks it to you, so win–loss records are yours alone. No password or cookie needed.</p>
+    <div class="field">
+      <label class="control-label" for="lc-username">LeetCode username</label>
+      <input id="lc-username" class="text-input" autocomplete="off" spellcheck="false" value="${escapeHtml(linking.username)}" placeholder="your-username" />
+    </div>
+    ${linking.error ? `<p class="form-error">${escapeHtml(linking.error)}</p>` : ""}
+    <div class="actions">
+      <button type="button" class="small-button" data-close>Cancel</button>
+      <button type="button" class="small-button accent" id="get-code" ${linking.busy ? "disabled" : ""}>${linking.busy ? "…" : "Continue"}</button>
+    </div>
+    <details class="advanced" ${linking.advanced ? "open" : ""}>
+      <summary>Advanced: judge on real LeetCode submissions</summary>
+      ${credentialsFormHtml()}
+    </details>`);
+  const input = $("lc-username");
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      $("get-code").click();
+    }
+  });
+  $("get-code").addEventListener("click", async () => {
+    linking.username = input.value.trim();
+    linking.busy = true;
+    linking.error = "";
+    renderLinkModal();
+    try {
+      const { pending } = await api("/api/leetcode/verify", {
+        method: "POST",
+        body: JSON.stringify({ action: "start", sessionId: state.session, username: linking.username }),
+      });
+      linking.pending = pending;
+    } catch (error) {
+      linking.error = error.message;
+    } finally {
+      linking.busy = false;
+      renderLinkModal();
+    }
+  });
+  wireCredentialsForm();
+  input.focus();
+}
+
+function renderCodeModal() {
+  const { username, code } = linking.pending;
+  openModal(`
+    <h2>Verify ${escapeHtml(username)}</h2>
+    <ol>
+      <li>Open <a href="https://leetcode.com/profile/" target="_blank" rel="noopener">your LeetCode profile settings</a>.</li>
+      <li>Paste this code into <strong>Name</strong> or <strong>Summary</strong> and save:</li>
+    </ol>
+    <div class="verify-code"><code id="verify-code">${escapeHtml(code)}</code><button type="button" class="small-button" id="copy-code">Copy</button></div>
+    <p>Then come back and verify. You can delete the code from your profile straight afterwards.</p>
+    ${linking.error ? `<p class="form-error">${escapeHtml(linking.error)}</p>` : ""}
+    <div class="actions">
+      <button type="button" class="small-button" id="verify-back">Back</button>
+      <button type="button" class="small-button accent" id="verify-now" ${linking.busy ? "disabled" : ""}>${linking.busy ? "Checking…" : "I've added it"}</button>
+    </div>`);
+  $("copy-code").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(linking.pending.code);
+      $("copy-code").textContent = "Copied";
+    } catch {
+      $("copy-code").textContent = "Select it";
+    }
+  });
+  $("verify-back").addEventListener("click", () => {
+    api("/api/leetcode/verify", { method: "POST", body: JSON.stringify({ action: "cancel", sessionId: state.session }) }).catch(() => {});
+    linking.pending = null;
+    linking.error = "";
+    renderLinkModal();
+  });
+  $("verify-now").addEventListener("click", async () => {
+    linking.busy = true;
+    linking.error = "";
+    renderLinkModal();
+    try {
+      const { username: verified } = await api("/api/leetcode/verify", {
+        method: "POST",
+        body: JSON.stringify({ action: "check", sessionId: state.session }),
+      });
+      linking.pending = null;
+      closeModal();
+      toast(`Linked as ${verified}`, "info");
+      pollOnce();
+    } catch (error) {
+      linking.error = error.message;
+    } finally {
+      linking.busy = false;
+      if (linking.pending) renderLinkModal();
+    }
+  });
+}
+
+function renderLinkedModal(me) {
+  openModal(`
+    <h2>${escapeHtml(me.leetcodeUser || "LeetCode account")}</h2>
+    <p>Verified${me.record ? ` · record ${formatRecord(me.record)}` : ""}. Your display name is locked to this username.</p>
+    ${
+      me.canSubmit
+        ? `<p class="warn">Submissions are connected: code you submit is sent to LeetCode as you, and your session cookie is stored (encrypted) on the server until you disconnect.</p>
+           <div class="actions">
+             <button type="button" class="small-button" data-close>Close</button>
+             <button type="button" class="small-button" id="drop-credentials">Disconnect submissions</button>
+             <button type="button" class="small-button danger" id="unlink-button">Unlink account</button>
+           </div>`
+        : `<details class="advanced"><summary>Judge on real LeetCode submissions</summary>${credentialsFormHtml()}</details>
+           <div class="actions">
+             <button type="button" class="small-button" data-close>Close</button>
+             <button type="button" class="small-button danger" id="unlink-button">Unlink account</button>
+           </div>`
+    }`);
+  wireCredentialsForm();
+  $("drop-credentials")?.addEventListener("click", async () => {
+    try {
+      await api("/api/leetcode/unlink", { method: "POST", body: JSON.stringify({ sessionId: state.session, credentialsOnly: true }) });
+      toast("Submissions disconnected.", "info");
+      await pollOnce();
+      renderLinkModal();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("unlink-button").addEventListener("click", async () => {
+    try {
+      await api("/api/leetcode/unlink", { method: "POST", body: JSON.stringify({ sessionId: state.session }) });
+      linking.pending = null;
+      closeModal();
+      pollOnce();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
+
+// Optional extra: cookies for real submissions. LeetCode has no OAuth or public
+// submit API, so this is the only way — kept behind a disclosure with the risk stated.
+function credentialsFormHtml() {
+  return `
+    <p class="warn">Your session cookie lets this server submit code as you. It is encrypted at rest and never shown again, but only add it on a site you trust, and disconnect when you're done.</p>
     <ol>
       <li>Log in at <a href="https://leetcode.com" target="_blank" rel="noopener">leetcode.com</a>.</li>
-      <li>Open DevTools (F12) → <strong>Application</strong> (Chrome) or <strong>Storage</strong> (Firefox) → Cookies → leetcode.com.</li>
-      <li>Copy the values of <code>LEETCODE_SESSION</code> and <code>csrftoken</code>.</li>
+      <li>DevTools (F12) → Application/Storage → Cookies → leetcode.com.</li>
+      <li>Copy <code>LEETCODE_SESSION</code> and <code>csrftoken</code>.</li>
     </ol>
     <div class="field"><label class="control-label" for="lc-session">LEETCODE_SESSION</label><input id="lc-session" class="text-input" autocomplete="off" spellcheck="false" /></div>
     <div class="field"><label class="control-label" for="lc-csrf">csrftoken</label><input id="lc-csrf" class="text-input" autocomplete="off" spellcheck="false" /></div>
     <p class="form-error" id="lc-error" hidden></p>
-    <div class="actions">
-      <button type="button" class="small-button" data-close>Cancel</button>
-      <button type="button" class="small-button accent" id="link-button">Link</button>
-    </div>`);
-  $("link-button").addEventListener("click", async () => {
-    const button = $("link-button");
+    <div class="actions"><button type="button" class="small-button accent" id="link-button">Connect submissions</button></div>`;
+}
+
+function wireCredentialsForm() {
+  const button = $("link-button");
+  if (!button) return;
+  button.addEventListener("click", async () => {
     button.disabled = true;
     button.textContent = "Checking…";
     $("lc-error").hidden = true;
@@ -2126,18 +2288,17 @@ function openLinkModal() {
         method: "POST",
         body: JSON.stringify({ sessionId: state.session, name: displayName(), session: $("lc-session").value, csrf: $("lc-csrf").value }),
       });
+      linking.pending = null;
       closeModal();
-      if (username) setName(username);
-      toast(`Linked as ${username}`, "info");
+      toast(`Submissions connected as ${username}`, "info");
       pollOnce();
     } catch (error) {
       $("lc-error").textContent = error.message;
       $("lc-error").hidden = false;
       button.disabled = false;
-      button.textContent = "Link";
+      button.textContent = "Connect submissions";
     }
   });
-  $("lc-session").focus();
 }
 
 // ---------------------------------------------------------------------------
