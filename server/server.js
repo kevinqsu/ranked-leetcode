@@ -245,6 +245,12 @@ async function handleApi(req, res, url) {
     return send(res, 200, { conversations: study.summaries(username) });
   }
 
+  if (route === "GET /api/study/config") {
+    const sessionId = requireSession(url.searchParams.get("sessionId"));
+    requireStudyUser(sessionId);
+    return send(res, 200, study.config());
+  }
+
   const studyConversation = route.startsWith("GET /api/study/conversations/")
     ? url.pathname.match(/^\/api\/study\/conversations\/([a-f0-9-]{36})$/)
     : null;
@@ -260,10 +266,15 @@ async function handleApi(req, res, url) {
     const username = requireStudyUser(sessionId);
     const gate = studyUsers.take(username.toLowerCase());
     if (!gate.ok) throw new StudyError("Too many study messages — wait a moment and try again.", 429);
+    const options = body.options && typeof body.options === "object" && !Array.isArray(body.options) ? { ...body.options } : {};
+    for (const key of ["model", "engine", "thinking", "thinkingLevel", "reasoning", "webSearch", "codeExecution", "urlContext"]) {
+      if (Object.hasOwn(body, key)) options[key] = body[key];
+    }
     return send(res, 200, await study.send(username, {
       conversationId: typeof body.conversationId === "string" ? body.conversationId : "",
       text: body.text,
       files: body.files,
+      options,
     }));
   }
 

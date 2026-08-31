@@ -9,6 +9,181 @@ const TEXT_EXTENSIONS = new Set([
 const escapeHtml = (text) =>
   String(text ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 
+const TOKEN_START = "\uE000";
+const TOKEN_END = "\uE001";
+const MATHJAX_SOURCE = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js";
+let mathJaxPromise = null;
+
+function token(kind, index) {
+  return `${TOKEN_START}${kind}${index}${TOKEN_END}`;
+}
+
+function likelyMath(value) {
+  return /[A-Za-z\\^_{}=]|[+*/-]\s*[A-Za-z0-9]/.test(value) && !/^\s*[\d.,]+\s*$/.test(value);
+}
+
+function extractMath(source, math) {
+  const addMath = (body, display) => {
+    math.push((display ? "\\[" : "\\(") + body + (display ? "\\]" : "\\)"));
+    return token("m", math.length - 1);
+  };
+  let value = source;
+  value = value.replace(/\$\$([\s\S]*?)\$\$/g, (_, body) => addMath(body, true));
+  value = value.replace(/\\\[([\s\S]*?)\\\]/g, (_, body) => addMath(body, true));
+  value = value.replace(/\\\(([\s\S]*?)\\\)/g, (_, body) => addMath(body, false));
+  return value.replace(/(^|[^\\$])\$([^$\n]+)\$(?!\$)/g, (match, prefix, body) =>
+    likelyMath(body) ? prefix + addMath(body, false) : match);
+}
+
+function renderInline(text) {
+  const code = [];
+  const math = [];
+  const links = [];
+  let source = String(text ?? "");
+  source = source.replace(/`([^`\n]+)`/g, (_, value) => token("c", code.push(value) - 1));
+  source = extractMath(source, math);
+  source = source.replace(/\[([^\]\n]+)\]\(([^\s)]+)(?:\s+["'][^)]*["'])?\)/g, (_, label, href) => {
+    if (!/^(?:https?:|mailto:)/i.test(href)) return _;
+    return token("l", links.push({ label, href }) - 1);
+  });
+  let html = escapeHtml(source)
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_\n]+)__/g, "<strong>$1</strong>")
+    .replace(/~~([^~\n]+)~~/g, "<del>$1</del>")
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
+    .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>")
+    .replace(/\n/g, "<br />");
+  html = html.replace(/\uE000([mcl])(\d+)\uE001/g, (_, kind, index) => {
+    const item = Number(index);
+    if (kind === "c") return code[item] !== undefined ? `<code>${escapeHtml(code[item])}</code>` : escapeHtml(token(kind, item));
+    if (kind === "m") return math[item] !== undefined ? `<span class="study-math">${escapeHtml(math[item])}</span>` : escapeHtml(token(kind, item));
+    const link = links[item];
+    if (!link) return escapeHtml(token(kind, item));
+    return `<a href="${escapeHtml(link.href)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>`;
+  });
+  return html;
+}
+
+function renderCodeBlock(language, code) {
+  const label = String(language || "code").trim().toLowerCase() || "code";
+  return `<pre><div class="study-code-label">${escapeHtml(label)}</div><code>${escapeHtml(code)}</code></pre>`;
+}
+
+function renderMarkdown(text) {
+  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const output = [];
+  let paragraph = [];
+  const flushParagraph = () => {
+    if (paragraph.length) output.push(`<p>${renderInline(paragraph.join("\n"))}</p>`);
+    paragraph = [];
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const fence = line.match(/^\s{0,3}(`{3,}|~{3,})\s*([^\s]*)\s*$/);
+    if (fence) {
+      flushParagraph();
+      const marker = fence[1][0];
+      const close = new RegExp(`^\\s{0,3}${marker}{${fence[1].length},}\\s*$`);
+      const code = [];
+      index += 1;
+      while (index < lines.length && !close.test(lines[index])) code.push(lines[index++]);
+      output.push(renderCodeBlock(fence[2], code.join("\n")));
+      continue;
+    }
+    const display = line.match(/^\s{0,3}(\$\$|\\\[)\s*$/);
+    if (display) {
+      flushParagraph();
+      const closing = display[1] === "$$" ? /^\s{0,3}\$\$\s*$/ : /^\s{0,3}\\\]\s*$/;
+      const body = [];
+      index += 1;
+      while (index < lines.length && !closing.test(lines[index])) body.push(lines[index++]);
+      output.push(`<div class="study-math study-math-display">${escapeHtml(`\\[${body.join("\n")}\\]`)}</div>`);
+      continue;
+    }
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (heading) {
+      flushParagraph();
+      const level = heading[1].length;
+      output.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      continue;
+    }
+    if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      flushParagraph();
+      output.push("<hr />");
+      continue;
+    }
+    const quote = line.match(/^\s{0,3}> ?(.*)$/);
+    if (quote) {
+      flushParagraph();
+      const quoted = [quote[1]];
+      while (index + 1 < lines.length) {
+        const next = lines[index + 1].match(/^\s{0,3}> ?(.*)$/);
+        if (!next) break;
+        quoted.push(next[1]);
+        index += 1;
+      }
+      output.push(`<blockquote>${renderMarkdown(quoted.join("\n"))}</blockquote>`);
+      continue;
+    }
+    const list = line.match(/^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/);
+    if (list) {
+      flushParagraph();
+      const ordered = /^\d/.test(list[1]);
+      const items = [list[2]];
+      while (index + 1 < lines.length) {
+        const next = lines[index + 1].match(/^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/);
+        if (!next || /^\d/.test(next[1]) !== ordered) break;
+        items.push(next[2]);
+        index += 1;
+      }
+      const tag = ordered ? "ol" : "ul";
+      output.push(`<${tag}>${items.map((item) => `<li>${renderInline(item)}</li>`).join("")}</${tag}>`);
+      continue;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      continue;
+    }
+    paragraph.push(line);
+  }
+  flushParagraph();
+  return output.join("");
+}
+
+function ensureMathJax() {
+  if (typeof window === "undefined") return Promise.reject(new Error("Math rendering is unavailable."));
+  if (window.MathJax?.typesetPromise) return Promise.resolve(window.MathJax);
+  if (mathJaxPromise) return mathJaxPromise;
+  window.MathJax = {
+    ...(window.MathJax || {}),
+    loader: { ...(window.MathJax?.loader || {}), load: [...new Set([...(window.MathJax?.loader?.load || []), "ui/safe"])] },
+    tex: { ...(window.MathJax?.tex || {}), inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] },
+    svg: { ...(window.MathJax?.svg || {}), fontCache: "global" },
+    options: {
+      ...(window.MathJax?.options || {}),
+      safeOptions: {
+        ...(window.MathJax?.options?.safeOptions || {}),
+        allow: { ...(window.MathJax?.options?.safeOptions?.allow || {}), URLs: "none", styles: "none" },
+      },
+    },
+    startup: { ...(window.MathJax?.startup || {}), typeset: false },
+  };
+  mathJaxPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = MATHJAX_SOURCE;
+    script.async = true;
+    script.onload = () => (window.MathJax.startup?.promise || Promise.resolve()).then(() => resolve(window.MathJax), reject);
+    script.onerror = () => reject(new Error("Math rendering is unavailable."));
+    document.head.append(script);
+  });
+  return mathJaxPromise;
+}
+
+function typesetMath(root) {
+  if (!root?.querySelector(".study-math")) return;
+  ensureMathJax().then((mathJax) => mathJax.typesetPromise([root])).catch(() => {});
+}
+
 function readableSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -38,21 +213,7 @@ function fileToBase64(file) {
 }
 
 function renderMessageText(text) {
-  const chunks = String(text || "").split("```");
-  return chunks
-    .map((chunk, index) => {
-      if (index % 2) {
-        const newline = chunk.indexOf("\n");
-        const language = newline > -1 ? chunk.slice(0, newline).trim() : "";
-        const code = newline > -1 ? chunk.slice(newline + 1) : chunk;
-        return `<pre><div class="study-code-label">${escapeHtml(language || "code")}</div><code>${escapeHtml(code)}</code></pre>`;
-      }
-      return `<div class="study-prose">${escapeHtml(chunk)
-        .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/\n/g, "<br />")}</div>`;
-    })
-    .join("");
+  return renderMarkdown(text);
 }
 
 function renderFilePills(files) {
@@ -75,11 +236,25 @@ export class StudyPage {
     this.loading = false;
     this.sending = false;
     this.error = "";
+    this.config = null;
+    this.configError = "";
+    this.options = {
+      model: "",
+      thinkingLevel: "",
+      webSearch: false,
+      codeExecution: true,
+      urlContext: true,
+    };
   }
 
-  async open() {
+  async open({ fresh = true } = {}) {
+    if (fresh) {
+      this.activeId = null;
+      this.messages = [];
+      this.files = [];
+    }
     this.mount();
-    await this.loadHistory();
+    await Promise.all([this.loadConfig(), this.loadHistory({ fresh })]);
   }
 
   close() {
@@ -96,6 +271,10 @@ export class StudyPage {
             <strong>Sessions</strong>
             <button type="button" class="study-new" id="study-new">New session</button>
           </div>
+          <details class="study-options" id="study-options">
+            <summary>options</summary>
+            <div class="study-options-body" id="study-options-body"></div>
+          </details>
           <div class="study-history" id="study-history"></div>
         </aside>
         <section class="study-main">
@@ -126,6 +305,7 @@ export class StudyPage {
     });
     const input = document.getElementById("study-input");
     input.addEventListener("input", () => this.resizeComposer());
+    input.addEventListener("paste", (event) => this.handlePaste(event));
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
@@ -135,14 +315,32 @@ export class StudyPage {
     this.renderAll();
   }
 
-  async loadHistory() {
+  async loadConfig() {
+    this.configError = "";
+    try {
+      const config = await this.api(`/api/study/config?sessionId=${encodeURIComponent(this.session())}`);
+      if (!Array.isArray(config?.models) || !config.models.length) throw new Error("tutor options unavailable.");
+      this.config = config;
+      const model = config.models.find((item) => item.id === this.options.model) || config.models.find((item) => item.id === config.defaultModel) || config.models[0];
+      this.options.model = model.id;
+      this.options.thinkingLevel = model.thinkingLevels.includes(this.options.thinkingLevel)
+        ? this.options.thinkingLevel
+        : model.thinkingLevels.includes("medium") ? "medium" : model.thinkingLevels[0] || "";
+      this.renderOptions();
+    } catch (error) {
+      this.configError = error.message;
+      this.renderOptions();
+    }
+  }
+
+  async loadHistory({ fresh = false } = {}) {
     this.loading = true;
     this.error = "";
     this.renderAll();
     try {
       const result = await this.api(`/api/study?sessionId=${encodeURIComponent(this.session())}`);
       this.conversations = result.conversations || [];
-      if (!this.activeId && this.conversations.length) this.activeId = this.conversations[0].id;
+      if (!fresh && !this.activeId && this.conversations.length) this.activeId = this.conversations[0].id;
       if (this.activeId) await this.selectConversation(this.activeId, { rerenderHistory: false });
     } catch (error) {
       this.error = error.message;
@@ -151,6 +349,68 @@ export class StudyPage {
       this.loading = false;
       this.renderAll();
     }
+  }
+
+  handlePaste(event) {
+    if (this.sending) return;
+    const items = [...(event.clipboardData?.items || [])];
+    const files = [];
+    const seen = new Set();
+    for (const item of items) {
+      if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+      const file = item.getAsFile?.();
+      if (!file || seen.has(file)) continue;
+      seen.add(file);
+      files.push(file.name ? file : new File([file], "pasted-image.png", { type: file.type }));
+    }
+    if (!files.length) {
+      for (const file of [...(event.clipboardData?.files || [])]) {
+        if (!file.type.startsWith("image/") || seen.has(file)) continue;
+        seen.add(file);
+        files.push(file);
+      }
+    }
+    if (!files.length) return;
+    this.addFiles(files);
+    if (!items.some((item) => item.kind === "string" && item.type === "text/plain")) event.preventDefault();
+  }
+
+  updateOption(name, value) {
+    if (name === "model") {
+      const model = this.config?.models?.find((item) => item.id === value);
+      if (!model) return;
+      this.options.model = model.id;
+      if (!model.thinkingLevels.includes(this.options.thinkingLevel)) {
+        this.options.thinkingLevel = model.thinkingLevels.includes("medium") ? "medium" : model.thinkingLevels[0] || "";
+      }
+    } else if (name === "thinkingLevel") {
+      this.options.thinkingLevel = value;
+    } else if (["webSearch", "codeExecution", "urlContext"].includes(name)) {
+      this.options[name] = Boolean(value);
+    }
+    this.renderOptions();
+  }
+
+  renderOptions() {
+    const root = document.getElementById("study-options-body");
+    if (!root) return;
+    if (!this.config) {
+      root.innerHTML = this.configError ? `<span class="study-options-error">${escapeHtml(this.configError)}</span>` : `<span class="study-options-loading">loading…</span>`;
+      return;
+    }
+    const model = this.config.models.find((item) => item.id === this.options.model) || this.config.models[0];
+    const thinking = model.thinkingLevels || [];
+    root.innerHTML = `
+      <label>model<select id="study-model" aria-label="model">${this.config.models.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === model.id ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label>
+      <label>thinking<select id="study-thinking" aria-label="thinking">${thinking.map((level) => `<option value="${escapeHtml(level)}" ${level === this.options.thinkingLevel ? "selected" : ""}>${escapeHtml(level)}</option>`).join("")}</select></label>
+      <label class="study-check"><input id="study-web-search" type="checkbox" ${this.options.webSearch ? "checked" : ""} /> web search <small>may require billing</small></label>
+      <label class="study-check"><input id="study-code-execution" type="checkbox" ${this.options.codeExecution ? "checked" : ""} /> code execution</label>
+      <label class="study-check"><input id="study-url-context" type="checkbox" ${this.options.urlContext ? "checked" : ""} /> url context</label>`;
+    document.getElementById("study-model").addEventListener("change", (event) => this.updateOption("model", event.target.value));
+    document.getElementById("study-thinking").addEventListener("change", (event) => this.updateOption("thinkingLevel", event.target.value));
+    document.getElementById("study-web-search").addEventListener("change", (event) => this.updateOption("webSearch", event.target.checked));
+    document.getElementById("study-code-execution").addEventListener("change", (event) => this.updateOption("codeExecution", event.target.checked));
+    document.getElementById("study-url-context").addEventListener("change", (event) => this.updateOption("urlContext", event.target.checked));
   }
 
   newStudy() {
@@ -247,6 +507,7 @@ export class StudyPage {
           conversationId: this.activeId,
           text,
           files,
+          options: { ...this.options },
         }),
       });
       this.activeId = result.conversation.id;
@@ -307,6 +568,7 @@ export class StudyPage {
       </article>`).join("")}
       ${this.sending ? `<article class="study-message response pending"><div class="study-message-role">Response</div><div class="study-loading"><span></span><span></span><span></span></div></article>` : ""}
     </div>`;
+    typesetMath(root);
     requestAnimationFrame(() => root.scrollTo({ top: root.scrollHeight, behavior: this.sending ? "smooth" : "auto" }));
   }
 
@@ -329,6 +591,7 @@ export class StudyPage {
   }
 
   renderAll() {
+    this.renderOptions();
     this.renderHistory();
     this.renderMessages();
     this.renderPendingFiles();

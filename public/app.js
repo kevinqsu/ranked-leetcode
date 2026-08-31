@@ -144,7 +144,7 @@ function openStudy() {
   state.problem = null;
   updateBar();
   updateLcButton();
-  studyPage.open();
+  studyPage.open({ fresh: true });
 }
 
 function duelAction(action, extra = {}) {
@@ -1752,7 +1752,7 @@ function updateBar() {
   const inWorkspace = !!problem && (state.mode === "practice" || state.mode === "duel" || state.mode === "spectate");
 
   if (state.mode === "study") {
-    center.innerHTML = `<span class="bar-problem">Study</span>`;
+    center.innerHTML = `<span class="bar-problem">tutor</span>`;
     actions.innerHTML = "";
     return;
   }
@@ -2123,8 +2123,8 @@ function updateLcButton() {
       studyButton.id = "study-button";
       studyButton.type = "button";
       studyButton.className = "bar-button study-launch";
-      studyButton.textContent = "Study";
-      studyButton.title = "Open study";
+      studyButton.textContent = "tutor";
+      studyButton.title = "open tutor";
       button.before(studyButton);
       studyButton.addEventListener("click", openStudy);
     }

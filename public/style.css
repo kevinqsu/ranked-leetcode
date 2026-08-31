@@ -633,6 +633,14 @@ body.resizing .cm-editor { pointer-events: none; }
   font-size: 12px;
 }
 .study-new:hover { border-color: var(--orange); }
+.study-options { margin: 0 8px 6px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font-size: 12px; }
+.study-options summary { cursor: pointer; padding: 8px 10px; color: var(--muted); }
+.study-options-body { display: grid; gap: 8px; padding: 0 10px 10px; }
+.study-options-body label { display: grid; gap: 4px; color: var(--muted); }
+.study-options-body select { min-width: 0; width: 100%; border: 1px solid var(--border); border-radius: 5px; padding: 5px 6px; background: var(--panel); color: var(--text); font: inherit; }
+.study-options-body .study-check { display: flex; align-items: center; gap: 6px; }
+.study-options-body .study-check small { margin-left: 3px; color: var(--muted); font-size: 10px; }
+.study-options-error, .study-options-loading { color: var(--muted); }
 .study-history { padding: 2px 8px 16px; overflow: auto; display: grid; align-content: start; gap: 3px; }
 .study-history button {
   min-width: 0;
@@ -668,11 +676,19 @@ body.resizing .cm-editor { pointer-events: none; }
 .study-message-role { color: var(--muted); font-size: 12px; font-weight: 600; padding-top: 2px; }
 .study-message-body { min-width: 0; font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 .study-message.user .study-message-body { color: var(--text); }
-.study-prose:empty { display: none; }
-.study-prose code { padding: 2px 5px; border-radius: 4px; background: var(--surface-2); font: 0.9em/1.4 "Cascadia Code", SFMono-Regular, Consolas, monospace; }
+.study-message-body p { margin: 0 0 12px; }
+.study-message-body p:last-child { margin-bottom: 0; }
+.study-message-body h1, .study-message-body h2, .study-message-body h3, .study-message-body h4, .study-message-body h5, .study-message-body h6 { margin: 14px 0 8px; line-height: 1.3; }
+.study-message-body ul, .study-message-body ol { margin: 8px 0 12px; padding-left: 24px; }
+.study-message-body li + li { margin-top: 4px; }
+.study-message-body blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--muted); }
+.study-message-body hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+.study-message-body code { padding: 2px 5px; border-radius: 4px; background: var(--surface-2); font: 0.9em/1.4 "Cascadia Code", SFMono-Regular, Consolas, monospace; }
 .study-message pre { margin: 12px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--editor); overflow: auto; }
 .study-message pre code { display: block; padding: 14px 16px 17px; font: 12px/1.6 "Cascadia Code", SFMono-Regular, Consolas, monospace; white-space: pre; }
 .study-code-label { padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+.study-math { display: inline-block; max-width: 100%; overflow-x: auto; }
+.study-math-display { display: block; margin: 12px 0; overflow-x: auto; }
 .study-message-files { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
 .study-message-files > span, .study-pending-files > span {
   max-width: 280px;

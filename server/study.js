@@ -2,7 +2,47 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-const ENGINE = process.env.STUDY_ENGINE || "";
+const DEFAULT_ENGINE = "gemini-3.7-flash";
+const STUDY_MODELS = Object.freeze([
+  Object.freeze({
+    id: "gemini-3.7-flash",
+    label: "gemini 3.7 flash",
+    thinkingLevels: Object.freeze(["low", "medium", "high"]),
+    tools: Object.freeze(["webSearch", "codeExecution", "urlContext"]),
+  }),
+  Object.freeze({
+    id: "gemini-3.6-flash",
+    label: "gemini 3.6 flash",
+    thinkingLevels: Object.freeze(["minimal", "low", "medium", "high"]),
+    tools: Object.freeze(["webSearch", "codeExecution", "urlContext"]),
+  }),
+  Object.freeze({
+    id: "gemini-3.5-flash",
+    label: "gemini 3.5 flash",
+    thinkingLevels: Object.freeze(["minimal", "low", "medium", "high"]),
+    tools: Object.freeze(["webSearch", "codeExecution", "urlContext"]),
+  }),
+  Object.freeze({
+    id: "gemini-3.5-flash-lite",
+    label: "gemini 3.5 flash-lite",
+    thinkingLevels: Object.freeze(["minimal", "low", "medium", "high"]),
+    tools: Object.freeze(["webSearch", "codeExecution", "urlContext"]),
+  }),
+  Object.freeze({
+    id: "gemini-3.1-flash-lite",
+    label: "gemini 3.1 flash-lite",
+    thinkingLevels: Object.freeze(["minimal", "low", "medium", "high"]),
+    tools: Object.freeze(["webSearch", "codeExecution", "urlContext"]),
+  }),
+]);
+const STUDY_MODELS_BY_ID = new Map(STUDY_MODELS.map((model) => [model.id, model]));
+const ENV_ENGINE = process.env.STUDY_ENGINE || DEFAULT_ENGINE;
+const DEFAULT_MODEL = STUDY_MODELS_BY_ID.has(ENV_ENGINE) ? ENV_ENGINE : DEFAULT_ENGINE;
+const STUDY_TOOL_REQUESTS = Object.freeze({
+  webSearch: { google_search: {} },
+  codeExecution: { code_execution: {} },
+  urlContext: { url_context: {} },
+});
 const MAX_CONVERSATIONS = 24;
 const MAX_MESSAGES = 60;
 const MAX_CONTEXT_MESSAGES = 30;
@@ -27,6 +67,53 @@ export class StudyError extends Error {
     this.name = "StudyError";
     this.status = status;
   }
+}
+
+function cleanOptionString(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeOptions(input, defaultModel = DEFAULT_MODEL) {
+  const raw = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const requestedModel = cleanOptionString(raw.model || raw.engine) || defaultModel;
+  const model = STUDY_MODELS_BY_ID.get(requestedModel);
+  if (!model) throw new StudyError("That study model is not available.");
+
+  const requestedThinking = cleanOptionString(raw.thinkingLevel || raw.thinking || raw.reasoning);
+  if (requestedThinking && !model.thinkingLevels.includes(requestedThinking)) {
+    throw new StudyError(`That model does not support ${requestedThinking} thinking.`);
+  }
+
+  const tools = Object.fromEntries(model.tools.map((name) => [name, raw[name] === true]));
+  return {
+    model: model.id,
+    thinkingLevel: requestedThinking || "",
+    ...tools,
+  };
+}
+
+function publicConfig(defaultModel) {
+  return {
+    defaultModel,
+    models: STUDY_MODELS.map(({ id, label, thinkingLevels, tools }) => ({
+      id,
+      label,
+      thinkingLevels: [...thinkingLevels],
+      tools: [...tools],
+    })),
+  };
+}
+
+function requestFor(account, messages, options, buildContents) {
+  const body = { contents: buildContents(account, messages) };
+  const tools = Object.entries(STUDY_TOOL_REQUESTS)
+    .filter(([name]) => options[name])
+    .map(([, tool]) => tool);
+  if (tools.length) body.tools = tools;
+  if (options.thinkingLevel) {
+    body.generationConfig = { thinkingConfig: { thinkingLevel: options.thinkingLevel } };
+  }
+  return body;
 }
 
 function atomicWrite(file, value) {
@@ -92,11 +179,17 @@ function titleFor(text, files) {
 }
 
 export class StudyService {
-  constructor(dataDir, { apiKey = process.env.STUDY_API_KEY || "", mock = process.env.STUDY_MOCK === "1" } = {}) {
+  constructor(dataDir, { apiKey = process.env.STUDY_API_KEY || "", model = DEFAULT_MODEL, mock = process.env.STUDY_MOCK === "1" } = {}) {
     this.root = path.join(dataDir, "study");
     this.apiKey = apiKey;
+    const requestedModel = cleanOptionString(model);
+    this.model = STUDY_MODELS_BY_ID.has(requestedModel) ? requestedModel : DEFAULT_ENGINE;
     this.mock = mock;
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
+  }
+
+  config() {
+    return publicConfig(this.model);
   }
 
   account(username) {
@@ -234,18 +327,19 @@ export class StudyService {
     });
   }
 
-  async generate(account, messages) {
+  async generate(account, messages, options) {
+    options = normalizeOptions(options, this.model);
     if (this.mock) {
       const latest = [...messages].reverse().find((message) => message.role === "user");
       return `Mock reply: ${latest?.text || latest?.files?.[0]?.name || "message received"}`;
     }
-    if (!this.apiKey || !ENGINE) throw new StudyError("Study is temporarily unavailable.", 503);
+    if (!this.apiKey) throw new StudyError("Study is temporarily unavailable.", 503);
     let response;
     try {
-      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${ENGINE}:generateContent`, {
+      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${options.model}:generateContent`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
-        body: JSON.stringify({ contents: this.buildContents(account, messages) }),
+        body: JSON.stringify(requestFor(account, messages, options, this.buildContents.bind(this))),
         signal: AbortSignal.timeout(70_000),
       });
     } catch (error) {
@@ -257,14 +351,19 @@ export class StudyService {
       const message = response.status === 429 ? "Study is busy right now. Try again shortly." : "The study service rejected the request.";
       throw new StudyError(message, response.status === 429 ? 429 : 502);
     }
-    const text = (payload?.candidates?.[0]?.content?.parts || []).map((part) => (typeof part.text === "string" ? part.text : "")).join("").trim();
+    const text = (payload?.candidates?.[0]?.content?.parts || [])
+      .filter((part) => part?.thought !== true)
+      .map((part) => (typeof part.text === "string" ? part.text : ""))
+      .join("")
+      .trim();
     if (!text) throw new StudyError("The study service returned no response. Try rephrasing your message.", 502);
     return text.slice(0, 80_000);
   }
 
-  async send(username, { conversationId, text: inputText, files: inputFiles }) {
+  async send(username, { conversationId, text: inputText, files: inputFiles, options: inputOptions }) {
     const text = cleanText(inputText);
     if (!text && (!Array.isArray(inputFiles) || !inputFiles.length)) throw new StudyError("Write a message or attach a file.");
+    const options = normalizeOptions(inputOptions, this.model);
     const account = this.account(username);
     let conversation;
     if (conversationId) conversation = this.read(account, conversationId);
@@ -278,7 +377,7 @@ export class StudyService {
     const nextMessages = [...conversation.messages, userMessage];
     let answer;
     try {
-      answer = await this.generate(account, nextMessages);
+      answer = await this.generate(account, nextMessages, options);
     } catch (error) {
       for (const file of files) {
         try { fs.unlinkSync(path.join(account.files, file.id)); } catch { /* already gone */ }
