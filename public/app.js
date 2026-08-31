@@ -1,5 +1,6 @@
 // 1v1 — LeetCode duels. Vanilla JS, no build step.
 import { parseLiteral, outputsMatch, formatValue, classifyError } from "./judge.js";
+import { StudyPage } from "./study.js";
 
 const CONFIG = window.CODEDUEL_CONFIG || {};
 const pyodideOverride = new URLSearchParams(location.search).get("pyodide");
@@ -58,7 +59,7 @@ const state = {
   name: storageGet("duel-name") || "",
   settings: loadSettings(),
   view: null,
-  mode: "home", // home | practice | duel | spectate
+  mode: "home", // home | practice | duel | spectate | study
   duelId: null,
   problem: null,
   testInput: "",
@@ -125,6 +126,25 @@ async function api(path, options = {}) {
   }
   if (!response.ok) throw new Error(payload?.error || `Request failed (${response.status}).`);
   return payload;
+}
+
+const studyPage = new StudyPage({
+  api,
+  session: () => state.session,
+  root: () => $("screen"),
+  onError: (error) => toast(error.message),
+});
+
+function openStudy() {
+  if (!state.view?.me?.canStudy) return;
+  editor.destroy();
+  closeModal();
+  state.mode = "study";
+  state.duelId = null;
+  state.problem = null;
+  updateBar();
+  updateLcButton();
+  studyPage.open();
 }
 
 function duelAction(action, extra = {}) {
@@ -417,6 +437,12 @@ function applyView(view) {
   $("online-pill").textContent = `${view.online} online`;
   updateLcButton();
   if (view.me?.linked && view.me.leetcodeUser && state.name !== view.me.leetcodeUser) setName(view.me.leetcodeUser);
+
+  if (state.mode === "study") {
+    if (!view.me?.canStudy) return goHome("Fully connect a LeetCode account to use this area.");
+    updateBar();
+    return;
+  }
   const watchedKey = view.duel && view.duel.spectators ? `${view.duel.id}:${view.duel.spectators.join("|")}` : "";
   if (watchedKey !== share.watchedKey) {
     share.watchedKey = watchedKey;
@@ -788,6 +814,7 @@ async function watchDuel(duelId) {
 
 function goHome(message) {
   const wasDuel = state.mode === "duel" || state.mode === "spectate";
+  if (state.mode === "study") studyPage.close();
   if (state.mode === "spectate") {
     duelAction("watch", { duelId: null }).catch(() => {});
     wsSend({ type: "watch", duelId: null });
@@ -1724,6 +1751,12 @@ function updateBar() {
   const problem = state.problem;
   const inWorkspace = !!problem && (state.mode === "practice" || state.mode === "duel" || state.mode === "spectate");
 
+  if (state.mode === "study") {
+    center.innerHTML = `<span class="bar-problem">Study</span>`;
+    actions.innerHTML = "";
+    return;
+  }
+
   if (!inWorkspace) {
     center.innerHTML = "";
     actions.innerHTML = "";
@@ -2080,6 +2113,23 @@ function updateLcButton() {
   const linked = !!state.view?.me?.linked;
   button.classList.toggle("linked", linked);
   button.textContent = linked ? `✓ ${state.view.me.leetcodeUser || "LeetCode linked"}` : "Link LeetCode";
+  const canStudy = !!state.view?.me?.canStudy;
+  let studyButton = $("study-button");
+  if (!canStudy) {
+    studyButton?.remove();
+  } else {
+    if (!studyButton) {
+      studyButton = document.createElement("button");
+      studyButton.id = "study-button";
+      studyButton.type = "button";
+      studyButton.className = "bar-button study-launch";
+      studyButton.textContent = "Study";
+      studyButton.title = "Open study";
+      button.before(studyButton);
+      studyButton.addEventListener("click", openStudy);
+    }
+    studyButton.classList.toggle("active", state.mode === "study");
+  }
   if (document.querySelector(".setup")) syncSetupForm();
 }
 

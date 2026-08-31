@@ -15,7 +15,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 const server = spawn(process.execPath, ["server/server.js"], {
   cwd: root,
-  env: { ...process.env, PORT: String(PORT), HOST: "127.0.0.1", LEETCODE_MOCK: "1", CODEDUEL_DATA_DIR: dataDir },
+  env: { ...process.env, PORT: String(PORT), HOST: "127.0.0.1", LEETCODE_MOCK: "1", STUDY_MOCK: "1", CODEDUEL_DATA_DIR: dataDir },
   stdio: ["ignore", "pipe", "pipe"],
 });
 server.stderr.on("data", (d) => process.stderr.write("[server] " + d));
@@ -66,7 +66,9 @@ const C = "cccccccc-3333-4333-8333-cccccccccccc";
 try {
   // static + health
   const index = await fetch(BASE + "/");
-  check("index.html served", index.status === 200 && (await index.text()).includes("<title>"));
+  const indexHtml = await index.text();
+  check("index.html served", index.status === 200 && indexHtml.includes("<title>"));
+  check("study button is absent from static HTML", !indexHtml.includes('id="study-button"'));
   check("health", (await get("/api/health")).body.ok === true);
   check("path traversal blocked", (await fetch(BASE + "/../package.json")).status === 404);
 
@@ -233,13 +235,27 @@ try {
   const verified = await post("/api/leetcode/verify", { action: "check", sessionId: V });
   check("verification links the username", verified.body.username === "kevinqsu", verified.body);
   const view = (await get(`/api/view?sessionId=${V}`)).body;
-  check("verified identity locks the name, without submit rights", view.me.name === "kevinqsu" && view.me.linked === true && view.me.canSubmit === false, view.me);
+  check("verified identity locks the name, without submit or study rights", view.me.name === "kevinqsu" && view.me.linked === true && view.me.canSubmit === false && view.me.canStudy === false, view.me);
+  check("profile-only account cannot list studys", (await get(`/api/study?sessionId=${V}`)).status === 403);
+  check("profile-only account cannot send study messages", (await post("/api/study/message", { sessionId: V, text: "blocked" })).status === 403);
   const noCreds = await post("/api/duels", { action: "create", sessionId: V, difficulty: "easy", judging: "leetcode" });
   check("leetcode judging needs credentials, not just a name", noCreds.status === 400, noCreds.body);
   const wrongAccount = await post("/api/leetcode/link", { sessionId: V, session: "user:someoneelse", csrf: "csrf1234" });
   check("credentials for another account refused", wrongAccount.status === 409, wrongAccount.body);
   const creds = await post("/api/leetcode/link", { sessionId: V, session: "user:kevinqsu", csrf: "csrf1234" });
-  check("own credentials accepted", creds.status === 200 && (await get(`/api/view?sessionId=${V}`)).body.me.canSubmit === true);
+  const fullyLinkedView = (await get(`/api/view?sessionId=${V}`)).body;
+  check("own credentials accepted", creds.status === 200 && fullyLinkedView.me.canSubmit === true && fullyLinkedView.me.canStudy === true);
+  const studyReply = await post("/api/study/message", {
+    sessionId: V,
+    text: "Explain this file",
+    files: [{ name: "example.py", type: "text/x-python", data: Buffer.from("print('hello')").toString("base64") }],
+  });
+  check("fully linked account can study", studyReply.status === 200 && /Mock reply/.test(studyReply.body.conversation.messages[1].text), studyReply.body);
+  check("study upload metadata persisted", studyReply.body.conversation.messages[0].files[0].name === "example.py" && studyReply.body.conversation.messages[0].files[0].size > 0);
+  const studyList = await get(`/api/study?sessionId=${V}`);
+  check("study history is listed for the account", studyList.status === 200 && studyList.body.conversations[0].id === studyReply.body.conversation.id, studyList.body);
+  const studyHistory = await get(`/api/study/conversations/${studyReply.body.conversation.id}?sessionId=${V}`);
+  check("study history reloads", studyHistory.status === 200 && studyHistory.body.conversation.messages.length === 2, studyHistory.body);
   await sleep(400); // let the debounced save land
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "state.json"), "utf8"));
   const saved = stored.users[V];

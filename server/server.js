@@ -5,6 +5,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { StudyError, StudyService, MAX_STUDY_BODY } from "./study.js";
 import { Store } from "./store.js";
 import { acceptWebSocket } from "./ws.js";
 import { DuelEngine, DuelError, cleanName, isValidSessionId } from "./duels.js";
@@ -58,6 +59,7 @@ const store = new Store(DATA_DIR);
 store.load({ users: {}, duels: {}, records: {} });
 const engine = new DuelEngine(store);
 const box = new SecretBox(DATA_DIR);
+const study = new StudyService(DATA_DIR);
 
 // Rate limits, per client IP. Generous for ordinary play, tight for the calls
 // that cost real work (LeetCode traffic) or that an attacker would want to grind.
@@ -66,7 +68,9 @@ const limits = {
   problems: new RateLimiter({ limit: 120, windowMs: 60 * 1000 }),
   submit: new RateLimiter({ limit: 60, windowMs: 60 * 1000 }),
   account: new RateLimiter({ limit: 40, windowMs: 5 * 60 * 1000 }),
+  study: new RateLimiter({ limit: 24, windowMs: 60 * 1000 }),
 };
+const studyUsers = new RateLimiter({ limit: 20, windowMs: 60 * 1000 });
 const MAX_SOCKETS_PER_IP = 40;
 const socketsPerIp = new Map();
 
@@ -113,18 +117,18 @@ function send(res, status, body, headers = {}) {
 }
 
 function fail(res, error) {
-  const status = error instanceof DuelError || error instanceof LeetCodeError ? error.status : 500;
+  const status = error instanceof DuelError || error instanceof LeetCodeError || error instanceof StudyError ? error.status : 500;
   if (status >= 500) console.error("[server]", error);
   send(res, status, { error: error.message || "Request failed." });
 }
 
-function readJson(req) {
+function readJson(req, maxBytes = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY) {
+      if (size > maxBytes) {
         reject(new DuelError("Request too large.", 413));
         req.destroy();
         return;
@@ -145,6 +149,14 @@ function readJson(req) {
 function requireSession(value) {
   if (!isValidSessionId(value)) throw new DuelError("Invalid session.", 400);
   return value;
+}
+
+function requireStudyUser(sessionId) {
+  const user = engine.user(sessionId);
+  if (!user?.leetcode?.username || !engine.canSubmitLeetCode(sessionId)) {
+    throw new StudyError("Fully connect a LeetCode account to use Study.", 403);
+  }
+  return user.leetcode.username;
 }
 
 function publicProblem(problem) {
@@ -225,6 +237,34 @@ async function handleApi(req, res, url) {
     const sessionId = requireSession(url.searchParams.get("sessionId"));
     engine.touch(sessionId);
     return send(res, 200, engine.view(sessionId));
+  }
+
+  if (route === "GET /api/study") {
+    const sessionId = requireSession(url.searchParams.get("sessionId"));
+    const username = requireStudyUser(sessionId);
+    return send(res, 200, { conversations: study.summaries(username) });
+  }
+
+  const studyConversation = route.startsWith("GET /api/study/conversations/")
+    ? url.pathname.match(/^\/api\/study\/conversations\/([a-f0-9-]{36})$/)
+    : null;
+  if (studyConversation) {
+    const sessionId = requireSession(url.searchParams.get("sessionId"));
+    const username = requireStudyUser(sessionId);
+    return send(res, 200, { conversation: study.get(username, studyConversation[1]) });
+  }
+
+  if (route === "POST /api/study/message") {
+    const body = await readJson(req, MAX_STUDY_BODY);
+    const sessionId = requireSession(body.sessionId);
+    const username = requireStudyUser(sessionId);
+    const gate = studyUsers.take(username.toLowerCase());
+    if (!gate.ok) throw new StudyError("Too many study messages — wait a moment and try again.", 429);
+    return send(res, 200, await study.send(username, {
+      conversationId: typeof body.conversationId === "string" ? body.conversationId : "",
+      text: body.text,
+      files: body.files,
+    }));
   }
 
   if (route === "GET /api/problem") {
@@ -392,6 +432,7 @@ async function handleApi(req, res, url) {
 // server
 
 function limiterFor(pathname) {
+  if (pathname === "/api/study/message") return limits.study;
   if (pathname.startsWith("/api/leetcode")) return limits.account;
   if (pathname === "/api/submit") return limits.submit;
   if (pathname.startsWith("/api/problem")) return limits.problems;
