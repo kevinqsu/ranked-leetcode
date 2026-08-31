@@ -439,7 +439,7 @@ function applyView(view) {
   if (view.me?.linked && view.me.leetcodeUser && state.name !== view.me.leetcodeUser) setName(view.me.leetcodeUser);
 
   if (state.mode === "study") {
-    if (!view.me?.canStudy) return goHome("Fully connect a LeetCode account to use this area.");
+    if (!view.me?.canStudy) return goHome("Verify a LeetCode account to use tutor.");
     updateBar();
     return;
   }

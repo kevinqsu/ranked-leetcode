@@ -292,7 +292,7 @@ export class DuelEngine {
         name: user ? user.name : "Guest",
         linked: this.isLinked(sessionId),
         canSubmit: this.canSubmitLeetCode(sessionId),
-        canStudy: this.canSubmitLeetCode(sessionId),
+        canStudy: this.isLinked(sessionId),
         leetcodeUser: user?.leetcode?.username || null,
         record: this.recordFor(sessionId),
       },

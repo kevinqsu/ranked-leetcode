@@ -13,19 +13,30 @@ const TOKEN_START = "\uE000";
 const TOKEN_END = "\uE001";
 const MATHJAX_SOURCE = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js";
 let mathJaxPromise = null;
+const typesetPending = new WeakMap();
+let tokenSerial = 0;
 
-function token(kind, index) {
-  return `${TOKEN_START}${kind}${index}${TOKEN_END}`;
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function tokenContext(source) {
+  let prefix;
+  do {
+    prefix = `${TOKEN_START}${(tokenSerial++).toString(36)}${TOKEN_START}`;
+  } while (source.includes(prefix));
+  const pattern = new RegExp(`${escapeRegExp(prefix)}([mcl])(\\d+)${escapeRegExp(TOKEN_END)}`, "g");
+  return { make: (kind, index) => `${prefix}${kind}${index}${TOKEN_END}`, pattern };
 }
 
 function likelyMath(value) {
   return /[A-Za-z\\^_{}=]|[+*/-]\s*[A-Za-z0-9]/.test(value) && !/^\s*[\d.,]+\s*$/.test(value);
 }
 
-function extractMath(source, math) {
+function extractMath(source, math, makeToken) {
   const addMath = (body, display) => {
     math.push((display ? "\\[" : "\\(") + body + (display ? "\\]" : "\\)"));
-    return token("m", math.length - 1);
+    return makeToken("m", math.length - 1);
   };
   let value = source;
   value = value.replace(/\$\$([\s\S]*?)\$\$/g, (_, body) => addMath(body, true));
@@ -40,11 +51,12 @@ function renderInline(text) {
   const math = [];
   const links = [];
   let source = String(text ?? "");
-  source = source.replace(/`([^`\n]+)`/g, (_, value) => token("c", code.push(value) - 1));
-  source = extractMath(source, math);
+  const context = tokenContext(source);
+  source = source.replace(/`([^`\n]+)`/g, (_, value) => context.make("c", code.push(value) - 1));
+  source = extractMath(source, math, context.make);
   source = source.replace(/\[([^\]\n]+)\]\(([^\s)]+)(?:\s+["'][^)]*["'])?\)/g, (_, label, href) => {
     if (!/^(?:https?:|mailto:)/i.test(href)) return _;
-    return token("l", links.push({ label, href }) - 1);
+    return context.make("l", links.push({ label, href }) - 1);
   });
   let html = escapeHtml(source)
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
@@ -53,12 +65,12 @@ function renderInline(text) {
     .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
     .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>")
     .replace(/\n/g, "<br />");
-  html = html.replace(/\uE000([mcl])(\d+)\uE001/g, (_, kind, index) => {
+  html = html.replace(context.pattern, (_, kind, index) => {
     const item = Number(index);
-    if (kind === "c") return code[item] !== undefined ? `<code>${escapeHtml(code[item])}</code>` : escapeHtml(token(kind, item));
-    if (kind === "m") return math[item] !== undefined ? `<span class="study-math">${escapeHtml(math[item])}</span>` : escapeHtml(token(kind, item));
+    if (kind === "c") return code[item] !== undefined ? `<code>${escapeHtml(code[item])}</code>` : escapeHtml(context.make(kind, item));
+    if (kind === "m") return math[item] !== undefined ? `<span class="study-math">${escapeHtml(math[item])}</span>` : escapeHtml(context.make(kind, item));
     const link = links[item];
-    if (!link) return escapeHtml(token(kind, item));
+    if (!link) return escapeHtml(context.make(kind, item));
     return `<a href="${escapeHtml(link.href)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>`;
   });
   return html;
@@ -181,7 +193,19 @@ function ensureMathJax() {
 
 function typesetMath(root) {
   if (!root?.querySelector(".study-math")) return;
-  ensureMathJax().then((mathJax) => mathJax.typesetPromise([root])).catch(() => {});
+  const html = root.innerHTML;
+  const pending = typesetPending.get(root);
+  if (pending?.html === html) return;
+  const promise = ensureMathJax()
+    .then((mathJax) => {
+      if (root.innerHTML !== html) return;
+      return mathJax.typesetPromise([root]);
+    })
+    .catch(() => {})
+    .finally(() => {
+      if (typesetPending.get(root)?.promise === promise) typesetPending.delete(root);
+    });
+  typesetPending.set(root, { html, promise });
 }
 
 function readableSize(bytes) {
@@ -356,18 +380,22 @@ export class StudyPage {
     const items = [...(event.clipboardData?.items || [])];
     const files = [];
     const seen = new Set();
+    const addImage = (file) => {
+      if (!file) return;
+      const normalized = file.name ? file : new File([file], "pasted-image.png", { type: file.type });
+      const key = `${normalized.name}\u0000${normalized.size}\u0000${normalized.type}\u0000${normalized.lastModified || 0}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      files.push(normalized);
+    };
     for (const item of items) {
       if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
       const file = item.getAsFile?.();
-      if (!file || seen.has(file)) continue;
-      seen.add(file);
-      files.push(file.name ? file : new File([file], "pasted-image.png", { type: file.type }));
+      addImage(file);
     }
     if (!files.length) {
       for (const file of [...(event.clipboardData?.files || [])]) {
-        if (!file.type.startsWith("image/") || seen.has(file)) continue;
-        seen.add(file);
-        files.push(file);
+        if (file.type.startsWith("image/")) addImage(file);
       }
     }
     if (!files.length) return;

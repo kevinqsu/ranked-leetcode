@@ -153,8 +153,8 @@ function requireSession(value) {
 
 function requireStudyUser(sessionId) {
   const user = engine.user(sessionId);
-  if (!user?.leetcode?.username || !engine.canSubmitLeetCode(sessionId)) {
-    throw new StudyError("Fully connect a LeetCode account to use Study.", 403);
+  if (!user?.leetcode?.username) {
+    throw new StudyError("Verify a LeetCode account to use tutor.", 403);
   }
   return user.leetcode.username;
 }

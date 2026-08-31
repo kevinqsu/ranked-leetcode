@@ -235,9 +235,13 @@ try {
   const verified = await post("/api/leetcode/verify", { action: "check", sessionId: V });
   check("verification links the username", verified.body.username === "kevinqsu", verified.body);
   const view = (await get(`/api/view?sessionId=${V}`)).body;
-  check("verified identity locks the name, without submit or study rights", view.me.name === "kevinqsu" && view.me.linked === true && view.me.canSubmit === false && view.me.canStudy === false, view.me);
-  check("profile-only account cannot list studys", (await get(`/api/study?sessionId=${V}`)).status === 403);
-  check("profile-only account cannot send study messages", (await post("/api/study/message", { sessionId: V, text: "blocked" })).status === 403);
+  check("verified identity enables tutor without submissions", view.me.name === "kevinqsu" && view.me.linked === true && view.me.canSubmit === false && view.me.canStudy === true, view.me);
+  const profileTutor = await get(`/api/study?sessionId=${V}`);
+  check("profile-only account can list tutor history", profileTutor.status === 200 && Array.isArray(profileTutor.body.conversations), profileTutor.body);
+  const profileConfig = await get(`/api/study/config?sessionId=${V}`);
+  check("profile-only account can load tutor options", profileConfig.status === 200 && profileConfig.body.defaultModel === "gemini-3.7-flash", profileConfig.body);
+  const profileReply = await post("/api/study/message", { sessionId: V, text: "blocked", options: { model: "gemini-3.7-flash", thinkingLevel: "high" } });
+  check("profile-only account can send tutor messages", profileReply.status === 200 && /Mock reply/.test(profileReply.body.conversation.messages[1].text), profileReply.body);
   const noCreds = await post("/api/duels", { action: "create", sessionId: V, difficulty: "easy", judging: "leetcode" });
   check("leetcode judging needs credentials, not just a name", noCreds.status === 400, noCreds.body);
   const wrongAccount = await post("/api/leetcode/link", { sessionId: V, session: "user:someoneelse", csrf: "csrf1234" });

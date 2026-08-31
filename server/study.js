@@ -39,9 +39,9 @@ const STUDY_MODELS_BY_ID = new Map(STUDY_MODELS.map((model) => [model.id, model]
 const ENV_ENGINE = process.env.STUDY_ENGINE || DEFAULT_ENGINE;
 const DEFAULT_MODEL = STUDY_MODELS_BY_ID.has(ENV_ENGINE) ? ENV_ENGINE : DEFAULT_ENGINE;
 const STUDY_TOOL_REQUESTS = Object.freeze({
-  webSearch: { google_search: {} },
-  codeExecution: { code_execution: {} },
-  urlContext: { url_context: {} },
+  webSearch: { googleSearch: {} },
+  codeExecution: { codeExecution: {} },
+  urlContext: { urlContext: {} },
 });
 const MAX_CONVERSATIONS = 24;
 const MAX_MESSAGES = 60;
@@ -109,7 +109,10 @@ function requestFor(account, messages, options, buildContents) {
   const tools = Object.entries(STUDY_TOOL_REQUESTS)
     .filter(([name]) => options[name])
     .map(([, tool]) => tool);
-  if (tools.length) body.tools = tools;
+  if (tools.length) {
+    body.tools = tools;
+    body.toolConfig = { includeServerSideToolInvocations: true };
+  }
   if (options.thinkingLevel) {
     body.generationConfig = { thinkingConfig: { thinkingLevel: options.thinkingLevel } };
   }
@@ -309,6 +312,9 @@ export class StudyService {
     const selected = messages.slice(-MAX_CONTEXT_MESSAGES);
     let fileBytes = 0;
     return selected.map((message) => {
+      if (message.role === "response" && Array.isArray(message.parts) && message.parts.length) {
+        return { role: "model", parts: message.parts.filter((part) => part && typeof part === "object") };
+      }
       const parts = [];
       if (message.text) parts.push({ text: message.text });
       if (message.role === "user") {
@@ -323,6 +329,9 @@ export class StudyService {
           }
         }
       }
+      if (message.role === "user" && !message.text && parts.some((part) => part.inline_data)) {
+        parts.unshift({ text: "Analyze the attachment." });
+      }
       return { role: message.role === "response" ? "model" : "user", parts: parts.length ? parts : [{ text: " " }] };
     });
   }
@@ -331,7 +340,8 @@ export class StudyService {
     options = normalizeOptions(options, this.model);
     if (this.mock) {
       const latest = [...messages].reverse().find((message) => message.role === "user");
-      return `Mock reply: ${latest?.text || latest?.files?.[0]?.name || "message received"}`;
+      const text = `Mock reply: ${latest?.text || latest?.files?.[0]?.name || "message received"}`;
+      return { text, parts: [{ text }] };
     }
     if (!this.apiKey) throw new StudyError("Study is temporarily unavailable.", 503);
     let response;
@@ -351,13 +361,14 @@ export class StudyService {
       const message = response.status === 429 ? "Study is busy right now. Try again shortly." : "The study service rejected the request.";
       throw new StudyError(message, response.status === 429 ? 429 : 502);
     }
-    const text = (payload?.candidates?.[0]?.content?.parts || [])
+    const parts = Array.isArray(payload?.candidates?.[0]?.content?.parts) ? payload.candidates[0].content.parts : [];
+    const text = parts
       .filter((part) => part?.thought !== true)
       .map((part) => (typeof part.text === "string" ? part.text : ""))
       .join("")
       .trim();
     if (!text) throw new StudyError("The study service returned no response. Try rephrasing your message.", 502);
-    return text.slice(0, 80_000);
+    return { text: text.slice(0, 80_000), parts };
   }
 
   async send(username, { conversationId, text: inputText, files: inputFiles, options: inputOptions }) {
@@ -384,7 +395,9 @@ export class StudyService {
       }
       throw error;
     }
-    nextMessages.push({ id: crypto.randomUUID(), role: "response", text: answer, files: [], createdAt: Date.now() });
+    const answerText = typeof answer === "string" ? answer : answer.text;
+    const answerParts = typeof answer === "string" ? [{ text: answer }] : answer.parts;
+    nextMessages.push({ id: crypto.randomUUID(), role: "response", text: answerText, parts: answerParts, files: [], createdAt: Date.now() });
     if (conversation.messages.length === 0) conversation.title = titleFor(text, files);
     const trimmedMessages = nextMessages.slice(0, Math.max(0, nextMessages.length - MAX_MESSAGES));
     conversation.messages = nextMessages.slice(-MAX_MESSAGES);
